@@ -1,0 +1,1847 @@
+
+```{r SH2 SH2-probe analysis}
+
+rm(list = ls())
+library(ggplot2)
+library(stringr)
+library(RColorBrewer)
+library(reshape2)
+library(readxl)
+
+df <- read.delim("input_data/SH2_probe_sh2_libfree_with_phospho_report.pg_matrix.tsv", header = TRUE)
+
+names(df)[6:11] <- data.frame(str_split_fixed(names(df)[6:11], "\\.", 10))[, 7]
+
+pg <- apply(!is.na(df[, 6:11]), 2, sum)
+proteotypic <- apply(!is.na(df[-grep(";", df$Protein.Group), 6:11]), 2, sum)
+
+pdf("out/statistics.pdf")
+
+p <- barplot(
+  rbind(pg, proteotypic),
+  beside = TRUE,
+  col = c("#87CEEB", "#E6E6FA"),
+  names.arg = names(pg),
+  legend = c("Protein groups", "Proteotypic proteins"),
+  ylab = "Number of phosphorylation sites",
+  ylim = c(0, max(pg) * 1.3)
+)
+
+text(x = p[1,], y = pg + 70, pg, col = "black")
+text(x = p[2,], y = proteotypic + 70, proteotypic, col = "black")
+
+dev.off()
+
+####Compare with NCB
+library(Vennerable)
+DataFromNCB <- read_excel("input_data/DataFromNCB.xlsx", sheet = "dataset S8")
+Human_proteome <- read_excel("input_data/Human_proteome.xlsx")
+DataFromNCBReviewed <- unique(DataFromNCB[DataFromNCB$Leading.Proteins %in% Human_proteome$Entry, 1])
+dfCompareNCB <- df[df$Protein.Group %in% DataFromNCBReviewed$Leading.Proteins, c(1, 6:11)]
+dfCompareNCB2 <- dfCompareNCB[apply(dfCompareNCB, 1, function(x) any(is.na(x))),]
+SH2 <- df[-grep(';', df$Protein.Group), c(1, 6:8)]
+SH2$na_num <- apply(SH2, 1, function(x) sum(is.na(x)))
+SH2_1 <- SH2[SH2$na_num < 2, ]
+SH2Probe <- df[-grep(';', df$Protein.Group), c(1, 9:11)]
+SH2Probe$na_num <- apply(SH2Probe, 1, function(x) sum(is.na(x)))
+SH2Probe_1 <- SH2Probe[SH2Probe$na_num < 2, ]
+
+# Generate Venn diagram
+pdf("out/venn_compareWithNCB.pdf")
+data <- Venn(
+  list(
+    "Proteins containing tyrosine phosphorylation sites (Data from PMID: 27642862)" = DataFromNCBReviewed$Leading.Proteins,
+    "Trifunctional probe" = SH2Probe_1$Protein.Group,
+    "SH2" = SH2_1$Protein.Group
+  )
+)
+a <- plot(data, doWeight = F)
+dev.off()
+
+
+
+# Subset data for volcano plot
+dfVolcanoplot <- df[-grep(';', df$Protein.Group), c(1, 6:11)]
+dfVolcanoplot1 <- dfVolcanoplot[, -1]
+row.names(dfVolcanoplot1) <- dfVolcanoplot$Protein.Group
+dfVolcanoplot1[is.na(dfVolcanoplot1)] <- min(dfVolcanoplot1, na.rm = T)
+
+# Calculate fold changes and p-values
+fd <- data.frame(apply(dfVolcanoplot1, 1, function(x) log2((mean(na.omit(x[grep("SP", names(dfVolcanoplot1))])) / mean(na.omit(x[grep("S1|S2|S3", names(dfVolcanoplot1))] ))))))
+                 
+pvalue <- data.frame(apply(dfVolcanoplot1, 1, function(x) t.test(x[grep("SP", names(dfVolcanoplot1))], x[grep("S1|S2|S3", names(dfVolcanoplot1))], paired = F, var.equal = F)$p.value))
+vol <- cbind(fd, pvalue)
+names(vol) <- c("fd", "P_value")
+dfVolcanoplot2 <- data.frame((cbind(dfVolcanoplot1, vol)))
+
+# Generate volcano plot
+pdf("out/SH2_probe_sh2.pdf", width = 6, height = 6)
+
+# Plot all points
+plot(
+  dfVolcanoplot2$fd,
+  -log10(dfVolcanoplot2$P_value),
+  col = "#00000033",
+  pch = 19,
+  cex = 1,
+  xlab = "log2(fold change)",
+  ylab = "-log10(p value)",
+  main = "SH2_probe VS SH2",
+  xlim = c(-4, 4),
+  ylim = c(min(-log10(dfVolcanoplot2$P_value), na.rm = T), max(-log10(dfVolcanoplot2$P_value), na.rm = T))
+)
+
+# Add significance thresholds and highlighting for significant points
+up <- subset(dfVolcanoplot2, dfVolcanoplot2$P_value < 0.05 & dfVolcanoplot2$fd > 0.25)
+down <- subset(dfVolcanoplot2, dfVolcanoplot2$P_value < 0.05 & dfVolcanoplot2$fd < -0.25)
+points(
+  up$fd,
+  -log10(up$P_value),
+  col = 1,
+  bg = "#87CEFA",
+  pch = 21,
+  cex = 1.5
+)
+points(
+  down$fd,
+  -log10(down$P_value),
+  col = 1,
+  bg = "#87CEFA",
+  pch = 21,
+  cex = 1.5
+)
+abline(h = 1.3, v = c(-0.25, 0.25), lty = 2, lwd = 1)
+
+dev.off()
+
+
+
+
+
+###compare with bioplex
+library(readr)
+library(clusterProfiler)
+library(org.Hs.eg.db)
+DataFromBioPlex_293T <-
+  read_delim(
+    "input_data/BioPlex_293T_Network_10K_Dec_2019.tsv",
+    delim = "\t",
+    escape_double = FALSE,
+    trim_ws = TRUE
+  )
+DataFromBioPlex_HCT116 <-
+  read_delim(
+    "input_data/BioPlex_HCT116_Network_5.5K_Dec_2019.tsv",
+    delim = "\t",
+    escape_double = FALSE,
+    trim_ws = TRUE
+  )
+DataFromBioPlex <-
+  rbind(DataFromBioPlex_293T, DataFromBioPlex_HCT116)
+
+ProteinWithSH2 <-
+  read_excel("input_data/proteinWithSH2_PMID22155787.xls",
+             sheet = "H. sapiens")
+ProteinWithSH2_1 <-
+  bitr(
+    ProteinWithSH2$`Homo sapiens`,
+    fromType = "SYMBOL",
+    toType = "UNIPROT",
+    OrgDb = "org.Hs.eg.db"
+  )
+
+DataFromBioPlex_A <-
+  DataFromBioPlex[DataFromBioPlex$SymbolA %in% ProteinWithSH2_1$SYMBOL, c(5, 6)]
+names(DataFromBioPlex_A) <- c("SH2_Bait", "Prey")
+DataFromBioPlex_B <-
+  DataFromBioPlex[DataFromBioPlex$SymbolB %in% ProteinWithSH2_1$SYMBOL, c(6, 5)]
+names(DataFromBioPlex_B) <- c("SH2_Bait", "Prey")
+DataFromBioPlex1 <-
+  data.frame(unique(rbind(DataFromBioPlex_A, DataFromBioPlex_B)))
+DataFromBioPlex2 <-
+  bitr(
+    DataFromBioPlex1$Prey,
+    fromType = "SYMBOL",
+    toType = "UNIPROT",
+    OrgDb = "org.Hs.eg.db"
+  )
+up1 <- up[row.names(up) %in% DataFromBioPlex2$UNIPROT,]
+down1 <- down[row.names(down) %in% DataFromBioPlex2$UNIPROT,]
+regulated <- rbind(up1, down1)
+regulated$UNIPROT <- row.names(regulated)
+IntProt <-
+  merge(regulated, DataFromBioPlex2, by = "UNIPROT", all = F)
+names(IntProt)[ncol(IntProt)] <- c("Prey")
+IntProt2 <- merge(IntProt, DataFromBioPlex1, by = "Prey", all = F)
+
+##### unit protein name
+IntProt_rename <- IntProt2[, c(2, 11)]
+names(IntProt_rename)[1] <- "Prey"
+Prey <- bitr(
+  IntProt_rename$Prey,
+  fromType = "UNIPROT",
+  toType = c("SYMBOL"),
+  OrgDb = "org.Hs.eg.db"
+)
+
+Prey <- Prey[!duplicated(Prey$UNIPROT), ]
+Prey$UnitPrey <- paste0(Prey$UNIPROT, "|", Prey$SYMBOL)
+Bait <- bitr(
+  IntProt_rename$SH2_Bait,
+  fromType = "SYMBOL",
+  toType = c("UNIPROT"),
+  OrgDb = "org.Hs.eg.db"
+)
+Bait <- Bait[!duplicated(Bait$SYMBOL), ]
+Bait$UnitBait <- paste0(Bait$UNIPROT, "|", Bait$SYMBOL)
+names(IntProt_rename) <- c("UNIPROT", "SYMBOL")
+IntProt_rename2 <-
+  merge(Prey[, c(1, 3)], IntProt_rename, by = "UNIPROT", all = F)
+names(IntProt_rename2)[1] <- c("UniprotPrey")
+IntProt_rename3 <-
+  merge(IntProt_rename2, Bait[, c(1, 3)], by = "SYMBOL", all = F)
+IntProt_rename4 <- IntProt_rename3[, -1]
+
+
+points(
+  up1$fd,-log10(up1$P_value),
+  col = 1,
+  bg = "#FFA07A",
+  pch = 21,
+  cex = 1.5
+)
+points(
+  down1$fd,-log10(down1$P_value),
+  col = 1,
+  bg = "#FFA07A",
+  pch = 21,
+  cex = 1.5
+)
+abline(
+  h = 1.3,
+  v = c(-0.25, 0.25),
+  lty = 2,
+  lwd = 1
+)
+
+text (x = 4, y = 5, paste0("up", nrow(up)))
+text (x = -4, y = 5, paste0("down", nrow(down)))
+
+text (x = 4, y = 4, paste0("up_ppi", nrow(up1)))
+text (x = -4, y = 4, paste0("down_ppi", nrow(down1)))
+
+
+write.csv(up1, "up1.csv")
+write.csv(down1, "down1.csv")
+write.csv(up, "up.csv")
+write.csv(down, "dwon.csv")
+
+dev.off()
+
+
+
+###regulate proteins heatmap
+library(pheatmap)
+regulate_heatmap0 <- dfVolcanoplot
+names(regulate_heatmap0)[1] <- "UniprotPrey"
+regulate_heatmap <-
+  data.frame(unique(
+    merge(
+      IntProt_rename4[, c(1, 2)],
+      regulate_heatmap0,
+      by = "UniprotPrey",
+      all.x = F,
+      all.y = F
+    )
+  ))
+
+regulate_heatmap_1 <- regulate_heatmap[, -c(1, 2)]
+row.names(regulate_heatmap_1) <- regulate_heatmap$UnitPrey
+colors = c(brewer.pal(11, "RdYlBu")[11:1])
+heatmap <- pheatmap(
+  regulate_heatmap_1,
+  scale = "row",
+  color = colors,
+  fontsize_col = 10,
+  cluster_rows = T,
+  cluster_cols = F,
+  show_rownames = T,
+  show_colnames = T,
+  fontsize = 10,
+  cellwidth = 10,
+  cellheight = 10,
+  filename = "out/heatmap_for_up_proteins.pdf",
+  main = paste0("Heatmap for up proteins ")
+)
+
+
+###SankeyPlot
+library(tidyverse)
+library(viridis)
+library(patchwork)
+library(hrbrthemes)
+library(circlize)
+sankey <- IntProt_rename4[, c(2, 3)]
+sankey$value <- 0.1
+sankey$UnitPrey <- paste0("P-", sankey$UnitPrey)
+
+regulate_heatmap_2 <- regulate_heatmap_1[heatmap$tree_row$order, ]
+nodes_prey <- data.frame(row.names(regulate_heatmap_2))
+nodes_prey[, 1] <- paste0("P-", nodes_prey[, 1])
+nodes_prey$ID <- seq(0, nrow(nodes_prey) - 1, 1)
+names(nodes_prey) <- c("names", "ID")
+nodes_bait <- data.frame(unique(sankey$UnitBait))
+nodes_bait$ID <-
+  seq(nrow(nodes_prey), nrow(nodes_bait) + nrow(nodes_prey) - 1, 1)
+names(nodes_bait) <- c("names", "ID")
+nodes <- rbind(nodes_prey, nodes_bait)
+nodes$IDPrey <- nodes$ID
+nodes$IDBait <- nodes$ID
+nodes$UnitPrey <- nodes[, 1]
+nodes$UnitBait <- nodes[, 1]
+
+sankey <- merge(sankey, nodes[, c(3, 5)], by = "UnitPrey", all = F)
+sankey <- merge(sankey, nodes[, c(6, 4)], by = "UnitBait", all = F)
+nodes <- data.frame(nodes[, 1])
+names(nodes) <- "name"
+
+sankey_prey_value <- data.frame(table(sankey$UnitPrey))
+sankey_prey_value$value <- 1 / sankey_prey_value$Freq
+sankey_prey_value <- sankey_prey_value[, -2]
+names(sankey_prey_value) <- c("UnitPrey", "value")
+sankey <- merge(sankey_prey_value, sankey[, -3], by = "UnitPrey", all =
+                  F)
+
+# Make the Network
+a <- sankeyNetwork(
+  Links = sankey,
+  Nodes = nodes,
+  Source = "IDPrey",
+  Target = "IDBait",
+  Value = "value",
+  NodeID = "name",
+  sinksRight = FALSE,
+  nodeWidth = 200,
+  fontSize = 3,
+  nodePadding = 1.5,
+  iterations = 0
+)
+
+library(htmlwidgets)
+
+aa <- a %>%
+  onRender("
+    function(el, x) {
+      d3.selectAll('.link').style('stroke-width', '0.5px');
+    }
+  ")
+
+saveNetwork(aa, "out/sankey.html")
+library(webshot)
+webshot("out/sankey.pdf")
+
+  
+```
+
+```{r  IEC data analysis- data overview}
+
+rm(list = ls())
+library(ggplot2)
+library(stringr)
+library(RColorBrewer)
+library(reshape2)
+library(readxl)
+df <-read.delim(
+    "input_data/lib_free_with_sh2Fasta_report.pg_matrix.tsv",
+    header = TRUE
+  )
+names(df)[-c(1:5)] <-
+  data.frame(str_split_fixed(names(df)[-c(1:5)], "\\.", 10))[, 8]
+##delete N30 P30
+df<-df[,-grep("30",names(df))]
+df1<-df[,-c(1:5)]
+row.names(df1)<-df[,1]
+
+Positive<-df1[,grep("P",names(df1))]
+Positive<- Positive[apply(Positive, 1, function(x) !all(is.na(x))), ]
+Negative<-df1[,grep("N",names(df1))]
+Negative<- Negative[apply(Negative, 1, function(x) !all(is.na(x))), ]
+
+###Stats
+Positive_pg <- apply(!is.na(Positive), 2, sum)
+Positive_proteotypic <-
+apply(!is.na(Positive[-grep(";", row.names(Positive)),]), 2, sum)
+Negative_pg <- apply(!is.na(Negative), 2, sum)
+Negative_proteotypic <-
+apply(!is.na(Negative[-grep(";", row.names(Negative)),]), 2, sum)
+pdf(
+  "Positive_statistics.pdf"
+)
+p <-
+  barplot(
+    rbind(Positive_pg, Positive_proteotypic),
+    beside = TRUE,
+    col = c("#87CEEB", "#E6E6FA"),
+    names.arg = names(Positive_pg),
+    legend = c("protein groups", "proteotypic proteins"),
+    ylab = "Numbers",
+    ylim = c(0, max(Positive_pg) * 1.3)
+  )
+
+text(x = p[1, ], y = Positive_pg + 70, Positive_pg, col = "black")
+text(x = p[2, ],
+     y = Positive_proteotypic + 70,
+     Positive_proteotypic,
+     col = "black")
+dev.off()
+pdf(
+  "Negative_statistics.pdf"
+)
+
+p <-
+  barplot(
+    rbind(Negative_pg, Negative_proteotypic),
+    beside = TRUE,
+    col = c("#87CEEB", "#E6E6FA"),
+    names.arg = names(Negative_pg),
+    legend = c("protein groups", "proteotypic proteins"),
+    ylab = "Numbers",
+    ylim = c(0, max(Negative_pg) * 1.3)
+  )
+
+text(x = p[1, ], y = Negative_pg + 70, Negative_pg, col = "black")
+
+text(x = p[2, ],
+     y = Negative_proteotypic + 70,
+     Negative_proteotypic,
+     col = "black")
+dev.off()
+
+
+##compare EGF+ -
+library(Vennerable)
+Positive<- Positive[apply(Positive, 1, function(x) !all(is.na(x))), ]
+Negative<- Negative[apply(Negative, 1, function(x) !all(is.na(x))), ]
+
+Positive_NA50<- Positive[rowMeans(is.na(Positive)) < 0.5, ]
+Negative_NA50<- Negative[rowMeans(is.na(Negative)) < 0.5, ]
+  
+pdf("venn_positive_negative_proteins.pdf ")
+data<-Venn(list("EGF+"=row.names(Positive),"EGF-"=row.names(Negative)))
+a<-plot(data,doWeight=F)
+dev.off()
+
+pdf("venn_positive_negative_proteins_NA50.pdf ")
+data<-Venn(list("EGF+"=row.names(Positive_NA50),"EGF-"=row.names(Negative_NA50)))
+a<-plot(data,doWeight=F)
+dev.off()
+
+
+#####protein number distribustion
+
+Positive_num<-apply(Positive,1,function(x) sum(!is.na(x)))
+pdf("positive_number_hist.pdf")
+hist(Positive_num)
+dev.off()
+
+
+
+names(Positive_num)<-row.names(Positive)
+Positive_num_hist<-hist(Positive_num)
+Positive_high<-names(Positive_num[Positive_num>20])
+Positive_medium<-names(Positive_num[Positive_num>10 & Positive_num <=20])
+Positive_low<-names(Positive_num[Positive_num<10])
+
+Negative_num<-apply(Negative,1,function(x) sum(!is.na(x)))
+pdf("Negative_number_hist.pdf")
+hist(Negative_num)
+dev.off()
+
+
+
+names(Negative_num)<-row.names(Negative)
+Negative_num_hist<-hist(Negative_num)
+Negative_high<-names(Negative_num[Negative_num>20])
+Negative_medium<-names(Negative_num[Negative_num>10 & Negative_num <=20])
+Negative_low<-names(Negative_num[Negative_num<10])
+
+###########GO and KEGG enrichment analysis
+
+library(clusterProfiler)
+library(org.Hs.eg.db)
+library(ggplot2)
+library(readxl)
+library(VennDiagram)
+library(ggplot2)
+
+# protein_overlap<-unique(c(calculate.overlap(x=list("EGF+"=row.names(Positive_NA50),"EGF-"=row.names(Negative_NA50))
+# ))[[3]])
+
+
+Positive_high = bitr(Positive_high, fromType="UNIPROT", toType=c("ENSEMBL", "ENTREZID"), OrgDb="org.Hs.eg.db")
+Positive_medium = bitr(Positive_medium, fromType="UNIPROT", toType=c("ENSEMBL", "ENTREZID"), OrgDb="org.Hs.eg.db")
+Positive_low = bitr(Positive_low, fromType="UNIPROT", toType=c("ENSEMBL", "ENTREZID"), OrgDb="org.Hs.eg.db")
+
+Negative_high = bitr(Negative_high, fromType="UNIPROT", toType=c("ENSEMBL", "ENTREZID"), OrgDb="org.Hs.eg.db")
+Negative_medium = bitr(Negative_medium, fromType="UNIPROT", toType=c("ENSEMBL", "ENTREZID"), OrgDb="org.Hs.eg.db")
+Negative_low = bitr(Negative_low, fromType="UNIPROT", toType=c("ENSEMBL", "ENTREZID"), OrgDb="org.Hs.eg.db")
+
+
+Positive_high_go_MF <- enrichGO(Positive_high$ENTREZID, OrgDb = org.Hs.eg.db, ont='MF',pAdjustMethod = 'BH',pvalueCutoff = 0.05, 
+                 qvalueCutoff = 0.05,keyType = 'ENTREZID')
+Positive_high_go_CC <- enrichGO(Positive_high$ENTREZID, OrgDb = org.Hs.eg.db, ont='CC',pAdjustMethod = 'BH',pvalueCutoff = 0.05, 
+                 qvalueCutoff = 0.05,keyType = 'ENTREZID')
+Positive_high_go_BP <- enrichGO(Positive_high$ENTREZID, OrgDb = org.Hs.eg.db, ont='BP',pAdjustMethod = 'BH',pvalueCutoff = 0.05, 
+                  qvalueCutoff = 0.05,keyType = 'ENTREZID')
+
+
+barplot(Positive_high_go_MF,showCategory=10,drop=T,title = "Molecular Function")
+ggsave(paste0("IEC_EGF_positive_negative/enrichment/Positive_high_Molecular_Function.pdf"),width = 5,height = 4)
+barplot(Positive_high_go_CC,showCategory=10,drop=T,title = "Biological_Process")
+ggsave(paste0("IEC_EGF_positive_negative/enrichment/Positive_high_Biological_Process.pdf"),width = 5,height = 4)
+barplot(Positive_high_go_BP,showCategory=10,drop=T,title = "Cellular Component")
+ggsave(paste0("IEC_EGF_positive_negative/enrichment/Positive_high_Cellular_Component.pdf"),width = 5,height = 4)
+
+Positive_medium_go_MF <- enrichGO(Positive_medium$ENTREZID, OrgDb = org.Hs.eg.db, ont='MF',pAdjustMethod = 'BH',pvalueCutoff = 0.05, 
+                 qvalueCutoff = 0.05,keyType = 'ENTREZID')
+Positive_medium_go_CC <- enrichGO(Positive_medium$ENTREZID, OrgDb = org.Hs.eg.db, ont='CC',pAdjustMethod = 'BH',pvalueCutoff = 0.05, 
+                 qvalueCutoff = 0.05,keyType = 'ENTREZID')
+Positive_medium_go_BP <- enrichGO(Positive_medium$ENTREZID, OrgDb = org.Hs.eg.db, ont='BP',pAdjustMethod = 'BH',pvalueCutoff = 0.05, 
+                  qvalueCutoff = 0.05,keyType = 'ENTREZID')
+barplot(Positive_medium_go_MF,showCategory=10,drop=T,title = "Molecular Function")
+ggsave(paste0("IEC_EGF_positive_negative/enrichment/Positive_medium_Molecular_Function.pdf"),width = 5,height = 4)
+barplot(Positive_medium_go_CC,showCategory=10,drop=T,title = "Biological_Process")
+ggsave(paste0("IEC_EGF_positive_negative/enrichment/Positive_medium_Biological_Process.pdf"),width = 5,height = 4)
+barplot(Positive_medium_go_BP,showCategory=10,drop=T,title = "Cellular Component")
+ggsave(paste0("IEC_EGF_positive_negative/enrichment/Positive_medium_Cellular_Component.pdf"),width = 5,height = 4)
+
+
+Positive_low_go_MF <- enrichGO(Positive_low$ENTREZID, OrgDb = org.Hs.eg.db, ont='MF',pAdjustMethod = 'BH',pvalueCutoff = 0.05, 
+                 qvalueCutoff = 0.05,keyType = 'ENTREZID')
+Positive_low_go_CC <- enrichGO(Positive_low$ENTREZID, OrgDb = org.Hs.eg.db, ont='CC',pAdjustMethod = 'BH',pvalueCutoff = 0.05, 
+                 qvalueCutoff = 0.05,keyType = 'ENTREZID')
+Positive_low_go_BP <- enrichGO(Positive_low$ENTREZID, OrgDb = org.Hs.eg.db, ont='BP',pAdjustMethod = 'BH',pvalueCutoff = 0.05, 
+                  qvalueCutoff = 0.05,keyType = 'ENTREZID')
+barplot(Positive_low_go_MF,showCategory=10,drop=T,title = "Molecular Function")
+ggsave(paste0("IEC_EGF_positive_negative/enrichment/Positive_low_Molecular_Function.pdf"),width = 5,height = 4)
+barplot(Positive_low_go_CC,showCategory=10,drop=T,title = "Biological_Process")
+ggsave(paste0("IEC_EGF_positive_negative/enrichment/Positive_low_Biological_Process.pdf"),width = 5,height = 4)
+barplot(Positive_low_go_BP,showCategory=10,drop=T,title = "Cellular Component")
+ggsave(paste0("IEC_EGF_positive_negative/enrichment/Positive_low_Cellular_Component.pdf"),width = 5,height = 4)
+
+
+
+Positive_high_KEGG <- enrichKEGG(gene=c(Positive_high$UNIPROT),  
+                              organism    = "hsa",            
+                              keyType     = "uniprot",
+                              universe    = NULL,
+                              pvalueCutoff= 0.05,
+                              qvalueCutoff= 0.2)
+
+barplot(Positive_high_KEGG,showCategory=10,drop=T,title = "KEGG")
+ggsave(paste0("IEC_EGF_positive_negative/enrichment/Positive_high_KEGG.pdf"),width = 5,height = 4)
+
+
+Positive_medium_KEGG <- enrichKEGG(gene=c(Positive_medium$UNIPROT),  
+                              organism    = "hsa",            
+                              keyType     = "uniprot",
+                              universe    = NULL,
+                              pvalueCutoff= 0.05,
+                              qvalueCutoff= 0.2)
+
+barplot(Positive_medium_KEGG,showCategory=10,drop=T,title = "KEGG")
+ggsave(paste0("IEC_EGF_positive_negative/enrichment/Positive_medium_KEGG.pdf"),width = 5,height = 4)
+
+Positive_low_KEGG <- enrichKEGG(gene=c(Positive_low$UNIPROT),  
+                              organism    = "hsa",            
+                              keyType     = "uniprot",
+                              universe    = NULL,
+                              pvalueCutoff= 0.05,
+                              qvalueCutoff= 0.2)
+
+barplot(Positive_low_KEGG,showCategory=10,drop=T,title = "KEGG")
+ggsave(paste0("IEC_EGF_positive_negative/enrichment/Positive_low_KEGG.pdf"),width = 5,height = 4)
+
+
+
+
+
+Negative_high_go_MF <- enrichGO(Negative_high$ENTREZID, OrgDb = org.Hs.eg.db, ont='MF',pAdjustMethod = 'BH',pvalueCutoff = 0.05, 
+                 qvalueCutoff = 0.05,keyType = 'ENTREZID')
+Negative_high_go_CC <- enrichGO(Negative_high$ENTREZID, OrgDb = org.Hs.eg.db, ont='CC',pAdjustMethod = 'BH',pvalueCutoff = 0.05, 
+                 qvalueCutoff = 0.05,keyType = 'ENTREZID')
+Negative_high_go_BP <- enrichGO(Negative_high$ENTREZID, OrgDb = org.Hs.eg.db, ont='BP',pAdjustMethod = 'BH',pvalueCutoff = 0.05, 
+                  qvalueCutoff = 0.05,keyType = 'ENTREZID')
+barplot(Negative_high_go_MF,showCategory=10,drop=T,title = "Molecular Function")
+ggsave(paste0("IEC_EGF_positive_negative/enrichment/Negative_high_Molecular_Function.pdf"),width = 5,height = 4)
+barplot(Negative_high_go_CC,showCategory=10,drop=T,title = "Biological_Process")
+ggsave(paste0("IEC_EGF_positive_negative/enrichment/Negative_high_Biological_Process.pdf"),width = 5,height = 4)
+barplot(Negative_high_go_BP,showCategory=10,drop=T,title = "Cellular Component")
+ggsave(paste0("IEC_EGF_positive_negative/enrichment/Negative_high_Cellular_Component.pdf"),width = 5,height = 4)
+
+Negative_medium_go_MF <- enrichGO(Negative_medium$ENTREZID, OrgDb = org.Hs.eg.db, ont='MF',pAdjustMethod = 'BH',pvalueCutoff = 0.05, 
+                 qvalueCutoff = 0.05,keyType = 'ENTREZID')
+Negative_medium_go_CC <- enrichGO(Negative_medium$ENTREZID, OrgDb = org.Hs.eg.db, ont='CC',pAdjustMethod = 'BH',pvalueCutoff = 0.05, 
+                 qvalueCutoff = 0.05,keyType = 'ENTREZID')
+Negative_medium_go_BP <- enrichGO(Negative_medium$ENTREZID, OrgDb = org.Hs.eg.db, ont='BP',pAdjustMethod = 'BH',pvalueCutoff = 0.05, 
+                  qvalueCutoff = 0.05,keyType = 'ENTREZID')
+barplot(Negative_medium_go_MF,showCategory=10,drop=T,title = "Molecular Function")
+ggsave(paste0("IEC_EGF_positive_negative/enrichment/Negative_medium_Molecular_Function.pdf"),width = 5,height = 4)
+barplot(Negative_medium_go_CC,showCategory=10,drop=T,title = "Biological_Process")
+ggsave(paste0("IEC_EGF_positive_negative/enrichment/Negative_medium_Biological_Process.pdf"),width = 5,height = 4)
+barplot(Negative_medium_go_BP,showCategory=10,drop=T,title = "Cellular Component")
+ggsave(paste0("IEC_EGF_positive_negative/enrichment/Negative_medium_Cellular_Component.pdf"),width = 5,height = 4)
+
+
+Negative_low_go_MF <- enrichGO(Negative_low$ENTREZID, OrgDb = org.Hs.eg.db, ont='MF',pAdjustMethod = 'BH',pvalueCutoff = 0.05, 
+                 qvalueCutoff = 0.05,keyType = 'ENTREZID')
+Negative_low_go_CC <- enrichGO(Negative_low$ENTREZID, OrgDb = org.Hs.eg.db, ont='CC',pAdjustMethod = 'BH',pvalueCutoff = 0.05, 
+                 qvalueCutoff = 0.05,keyType = 'ENTREZID')
+Negative_low_go_BP <- enrichGO(Negative_low$ENTREZID, OrgDb = org.Hs.eg.db, ont='BP',pAdjustMethod = 'BH',pvalueCutoff = 0.05, 
+                  qvalueCutoff = 0.05,keyType = 'ENTREZID')
+barplot(Negative_low_go_MF,showCategory=10,drop=T,title = "Molecular Function")
+ggsave(paste0("IEC_EGF_positive_negative/enrichment/Negative_low_Molecular_Function.pdf"),width = 5,height = 4)
+barplot(Negative_low_go_CC,showCategory=10,drop=T,title = "Biological_Process")
+ggsave(paste0("IEC_EGF_positive_negative/enrichment/Negative_low_Biological_Process.pdf"),width = 5,height = 4)
+barplot(Negative_low_go_BP,showCategory=10,drop=T,title = "Cellular Component")
+ggsave(paste0("IEC_EGF_positive_negative/enrichment/Negative_low_Cellular_Component.pdf"),width = 5,height = 4)
+
+Negative_high_KEGG <- enrichKEGG(gene=c(Negative_high$UNIPROT),  
+                              organism    = "hsa",            
+                              keyType     = "uniprot",
+                              universe    = NULL,
+                              pvalueCutoff= 0.05,
+                              qvalueCutoff= 0.2)
+
+barplot(Negative_high_KEGG,showCategory=10,drop=T,title = "KEGG")
+ggsave(paste0("IEC_EGF_positive_negative/enrichment/Negative_high_KEGG.pdf"),width = 5,height = 4)
+
+
+Negative_medium_KEGG <- enrichKEGG(gene=c(Negative_medium$UNIPROT),  
+                              organism    = "hsa",            
+                              keyType     = "uniprot",
+                              universe    = NULL,
+                              pvalueCutoff= 0.05,
+                              qvalueCutoff= 0.2)
+
+barplot(Negative_medium_KEGG,showCategory=10,drop=T,title = "KEGG")
+ggsave(paste0("IEC_EGF_positive_negative/enrichment/Negative_medium_KEGG.pdf"),width = 5,height = 4)
+
+Negative_low_KEGG <- enrichKEGG(gene=c(Negative_low$UNIPROT),  
+                              organism    = "hsa",            
+                              keyType     = "uniprot",
+                              universe    = NULL,
+                              pvalueCutoff= 0.05,
+                              qvalueCutoff= 0.2)
+
+barplot(Negative_low_KEGG,showCategory=10,drop=T,title = "KEGG")
+ggsave(paste0("IEC_EGF_positive_negative/enrichment/Negative_low_KEGG.pdf"),width = 5,height = 4)
+
+
+
+
+#####Bubble plot
+library(stringr)
+library(GOplot)
+Positive_high_MF_bubble<-data.frame(Positive_high_go_MF)
+Positive_high_MF_bubble$category<-"Positive_high_go_MF"
+Positive_high_MF_bubble$rank<-rank(Positive_high_MF_bubble$p.adjust)
+Positive_high_MF_bubble<-Positive_high_MF_bubble[Positive_high_MF_bubble$rank<11,]
+Positive_medium_MF_bubble<-data.frame(Positive_medium_go_MF)
+Positive_medium_MF_bubble$category<-"Positive_medium_go_MF"
+Positive_medium_MF_bubble$rank<-rank(Positive_medium_MF_bubble$p.adjust)
+Positive_medium_MF_bubble<-Positive_medium_MF_bubble[Positive_medium_MF_bubble$rank<11,]
+Positive_low_MF_bubble<-data.frame(Positive_low_go_MF)
+Positive_low_MF_bubble$category<-"Positive_low_go_MF"
+Positive_low_MF_bubble$rank<-rank(Positive_low_MF_bubble$p.adjust)
+Positive_low_MF_bubble<-Positive_low_MF_bubble[Positive_low_MF_bubble$rank<11,]
+Negative_high_MF_bubble<-data.frame(Negative_high_go_MF)
+Negative_high_MF_bubble$category<-"Negative_high_go_MF"
+Negative_high_MF_bubble$rank<-rank(Negative_high_MF_bubble$p.adjust)
+Negative_high_MF_bubble<-Negative_high_MF_bubble[Negative_high_MF_bubble$rank<11,]
+Negative_medium_MF_bubble<-data.frame(Negative_medium_go_MF)
+Negative_medium_MF_bubble$category<-"Negative_medium_go_MF"
+Negative_medium_MF_bubble$rank<-rank(Negative_medium_MF_bubble$p.adjust)
+Negative_medium_MF_bubble<-Negative_medium_MF_bubble[Negative_medium_MF_bubble$rank<11,]
+Negative_low_MF_bubble<-data.frame(Negative_low_go_MF)
+Negative_low_MF_bubble$category<-"Negative_low_go_MF"
+Negative_low_MF_bubble$rank<-rank(Negative_low_MF_bubble$p.adjust)
+Negative_low_MF_bubble<-Negative_low_MF_bubble[Negative_low_MF_bubble$rank<11,]
+Positive_high_MF_bubble$Description<-paste0(Positive_high_MF_bubble$Description,"-Positive")
+Positive_medium_MF_bubble$Description<-paste0(Positive_medium_MF_bubble$Description,"-Positive")
+Positive_low_MF_bubble$Description<-paste0(Positive_low_MF_bubble$Description,"-Positive")
+Negative_high_MF_bubble$Description<-paste0(Negative_high_MF_bubble$Description,"-Negative")
+Negative_medium_MF_bubble$Description<-paste0(Negative_medium_MF_bubble$Description,"-Negative")
+Negative_low_MF_bubble$Description<-paste0(Negative_low_MF_bubble$Description,"-Negative")
+Bubble_MF_high<-rbind(Positive_high_MF_bubble,Negative_high_MF_bubble)
+Bubble<-Bubble_MF_high
+ratio<-data.frame(str_split_fixed(Bubble$GeneRatio,"/",2))
+ratio$X1<-as.numeric(ratio$X1)
+ratio$X2<-as.numeric(ratio$X2)
+ratio$ratio<-paste0(ratio$X1 /ratio$X2)
+Bubble1<-data.frame(Bubble[,10])
+Bubble1$zscore<-as.numeric(Bubble$Count)
+Bubble1$adj_pval<-as.numeric(Bubble$p.adjust)
+Bubble1$count<-as.numeric(ratio$ratio)
+Bubble1$ID<-Bubble$ID
+Bubble1$term<-Bubble$Description
+names(Bubble1)<-c("category" ,"zscore" ,       "adj_pval"  ,   "count"    ,    "ID",           "term"  )
+p<-GOBubble(Bubble1, title = 'Bubble plot', colour = c('palegreen4', 'orangered'), display = 'single', labels = 15,ID=F,table.col=F,bg.col=F,table.legend = F)  
+m<-GOBubble(Bubble1, title = 'Bubble plot', colour = c('palegreen4', 'orangered'), display = 'multiple', labels = 10,ID=F,table.col=F,bg.col=F)  
+ggsave("IEC_EGF_positive_negative/enrichment/MF_high_bubble_single.pdf" ,plot = p, device = NULL, path = NULL)
+ggsave("IEC_EGF_positive_negative/enrichment/MF_high_bubble_multiple.pdf" ,plot = m, device = NULL, path = NULL,width = 10, height = 4)
+Bubble_MF_medium<-rbind(Positive_medium_MF_bubble,Negative_medium_MF_bubble)
+Bubble<-Bubble_MF_medium
+ratio<-data.frame(str_split_fixed(Bubble$GeneRatio,"/",2))
+ratio$X1<-as.numeric(ratio$X1)
+ratio$X2<-as.numeric(ratio$X2)
+ratio$ratio<-paste0(ratio$X1 /ratio$X2)
+Bubble1<-data.frame(Bubble[,10])
+Bubble1$zscore<-as.numeric(Bubble$Count)
+Bubble1$adj_pval<-as.numeric(Bubble$p.adjust)
+Bubble1$count<-as.numeric(ratio$ratio)
+Bubble1$ID<-Bubble$ID
+Bubble1$term<-Bubble$Description
+names(Bubble1)<-c("category" ,"zscore" ,       "adj_pval"  ,   "count"    ,    "ID",           "term"  )
+p<-GOBubble(Bubble1, title = 'Bubble plot', colour = c('palegreen4', 'orangered'), display = 'single', labels = 10,ID=F,table.col=F,bg.col=F,table.legend = F)  
+m<-GOBubble(Bubble1, title = 'Bubble plot', colour = c('palegreen4', 'orangered'), display = 'multiple', labels = 10,ID=F,table.col=F,bg.col=F)  
+ggsave("IEC_EGF_positive_negative/enrichment/MF_medium_bubble_single.pdf" ,plot = p, device = NULL, path = NULL)
+ggsave("IEC_EGF_positive_negative/enrichment/MF_medium_bubble_multiple.pdf" ,plot = m, device = NULL, path = NULL,width = 10, height = 4)
+Bubble_MF_low<-rbind(Positive_low_MF_bubble,Negative_low_MF_bubble)
+Bubble<-Bubble_MF_low
+ratio<-data.frame(str_split_fixed(Bubble$GeneRatio,"/",2))
+ratio$X1<-as.numeric(ratio$X1)
+ratio$X2<-as.numeric(ratio$X2)
+ratio$ratio<-paste0(ratio$X1 /ratio$X2)
+Bubble1<-data.frame(Bubble[,10])
+Bubble1$zscore<-as.numeric(Bubble$Count)
+Bubble1$adj_pval<-as.numeric(Bubble$p.adjust)
+Bubble1$count<-as.numeric(ratio$ratio)
+Bubble1$ID<-Bubble$ID
+Bubble1$term<-Bubble$Description
+names(Bubble1)<-c("category" ,"zscore" ,       "adj_pval"  ,   "count"    ,    "ID",           "term"  )
+p<-GOBubble(Bubble1, title = 'Bubble plot', colour = c('palegreen4', 'orangered'), display = 'single', labels = 10,ID=F,table.col=F,bg.col=F,table.legend = F)  
+m<-GOBubble(Bubble1, title = 'Bubble plot', colour = c('palegreen4', 'orangered'), display = 'multiple', labels = 10,ID=F,table.col=F,bg.col=F)  
+ggsave("IEC_EGF_positive_negative/enrichment/MF_low_bubble_single.pdf" ,plot = p, device = NULL, path = NULL)
+ggsave("IEC_EGF_positive_negative/enrichment/MF_low_bubble_multiple.pdf" ,plot = m, device = NULL, path = NULL,width = 10, height = 4)
+
+
+
+
+
+Positive_high_BP_bubble<-data.frame(Positive_high_go_BP)
+Positive_high_BP_bubble$category<-"Positive_high_go_BP"
+Positive_high_BP_bubble$rank<-rank(Positive_high_BP_bubble$p.adjust)
+Positive_high_BP_bubble<-Positive_high_BP_bubble[Positive_high_BP_bubble$rank<11,]
+Positive_medium_BP_bubble<-data.frame(Positive_medium_go_BP)
+Positive_medium_BP_bubble$category<-"Positive_medium_go_BP"
+Positive_medium_BP_bubble$rank<-rank(Positive_medium_BP_bubble$p.adjust)
+Positive_medium_BP_bubble<-Positive_medium_BP_bubble[Positive_medium_BP_bubble$rank<11,]
+Positive_low_BP_bubble<-data.frame(Positive_low_go_BP)
+Positive_low_BP_bubble$category<-"Positive_low_go_BP"
+Positive_low_BP_bubble$rank<-rank(Positive_low_BP_bubble$p.adjust)
+Positive_low_BP_bubble<-Positive_low_BP_bubble[Positive_low_BP_bubble$rank<11,]
+Negative_high_BP_bubble<-data.frame(Negative_high_go_BP)
+Negative_high_BP_bubble$category<-"Negative_high_go_BP"
+Negative_high_BP_bubble$rank<-rank(Negative_high_BP_bubble$p.adjust)
+Negative_high_BP_bubble<-Negative_high_BP_bubble[Negative_high_BP_bubble$rank<11,]
+Negative_medium_BP_bubble<-data.frame(Negative_medium_go_BP)
+Negative_medium_BP_bubble$category<-"Negative_medium_go_BP"
+Negative_medium_BP_bubble$rank<-rank(Negative_medium_BP_bubble$p.adjust)
+Negative_medium_BP_bubble<-Negative_medium_BP_bubble[Negative_medium_BP_bubble$rank<11,]
+Negative_low_BP_bubble<-data.frame(Negative_low_go_BP)
+Negative_low_BP_bubble$category<-"Negative_low_go_BP"
+Negative_low_BP_bubble$rank<-rank(Negative_low_BP_bubble$p.adjust)
+Negative_low_BP_bubble<-Negative_low_BP_bubble[Negative_low_BP_bubble$rank<11,]
+Positive_high_BP_bubble$Description<-paste0(Positive_high_BP_bubble$Description,"-Positive")
+Positive_medium_BP_bubble$Description<-paste0(Positive_medium_BP_bubble$Description,"-Positive")
+Positive_low_BP_bubble$Description<-paste0(Positive_low_BP_bubble$Description,"-Positive")
+Negative_high_BP_bubble$Description<-paste0(Negative_high_BP_bubble$Description,"-Negative")
+Negative_medium_BP_bubble$Description<-paste0(Negative_medium_BP_bubble$Description,"-Negative")
+Negative_low_BP_bubble$Description<-paste0(Negative_low_BP_bubble$Description,"-Negative")
+Bubble_BP_high<-rbind(Positive_high_BP_bubble,Negative_high_BP_bubble)
+Bubble<-Bubble_BP_high
+ratio<-data.frame(str_split_fixed(Bubble$GeneRatio,"/",2))
+ratio$X1<-as.numeric(ratio$X1)
+ratio$X2<-as.numeric(ratio$X2)
+ratio$ratio<-paste0(ratio$X1 /ratio$X2)
+Bubble1<-data.frame(Bubble[,10])
+Bubble1$zscore<-as.numeric(Bubble$Count)
+Bubble1$adj_pval<-as.numeric(Bubble$p.adjust)
+Bubble1$count<-as.numeric(ratio$ratio)
+Bubble1$ID<-Bubble$ID
+Bubble1$term<-Bubble$Description
+names(Bubble1)<-c("category" ,"zscore" ,       "adj_pval"  ,   "count"    ,    "ID",           "term"  )
+p<-GOBubble(Bubble1, title = 'Bubble plot', colour = c('palegreen4', 'orangered'), display = 'single', labels = 15,ID=F,table.col=F,bg.col=F,table.legend = F)  
+m<-GOBubble(Bubble1, title = 'Bubble plot', colour = c('palegreen4', 'orangered'), display = 'multiple', labels = 10,ID=F,table.col=F,bg.col=F)  
+ggsave("IEC_EGF_positive_negative/enrichment/BP_high_bubble_single.pdf" ,plot = p, device = NULL, path = NULL)
+ggsave("IEC_EGF_positive_negative/enrichment/BP_high_bubble_multiple.pdf" ,plot = m, device = NULL, path = NULL,width = 10, height = 4)
+Bubble_BP_medium<-rbind(Positive_medium_BP_bubble,Negative_medium_BP_bubble)
+Bubble<-Bubble_BP_medium
+ratio<-data.frame(str_split_fixed(Bubble$GeneRatio,"/",2))
+ratio$X1<-as.numeric(ratio$X1)
+ratio$X2<-as.numeric(ratio$X2)
+ratio$ratio<-paste0(ratio$X1 /ratio$X2)
+Bubble1<-data.frame(Bubble[,10])
+Bubble1$zscore<-as.numeric(Bubble$Count)
+Bubble1$adj_pval<-as.numeric(Bubble$p.adjust)
+Bubble1$count<-as.numeric(ratio$ratio)
+Bubble1$ID<-Bubble$ID
+Bubble1$term<-Bubble$Description
+names(Bubble1)<-c("category" ,"zscore" ,       "adj_pval"  ,   "count"    ,    "ID",           "term"  )
+p<-GOBubble(Bubble1, title = 'Bubble plot', colour = c('palegreen4', 'orangered'), display = 'single', labels = 10,ID=F,table.col=F,bg.col=F,table.legend = F)  
+m<-GOBubble(Bubble1, title = 'Bubble plot', colour = c('palegreen4', 'orangered'), display = 'multiple', labels = 10,ID=F,table.col=F,bg.col=F)  
+ggsave("IEC_EGF_positive_negative/enrichment/BP_medium_bubble_single.pdf" ,plot = p, device = NULL, path = NULL)
+ggsave("IEC_EGF_positive_negative/enrichment/BP_medium_bubble_multiple.pdf" ,plot = m, device = NULL, path = NULL,width = 10, height = 4)
+Bubble_BP_low<-rbind(Positive_low_BP_bubble,Negative_low_BP_bubble)
+Bubble<-Bubble_BP_low
+ratio<-data.frame(str_split_fixed(Bubble$GeneRatio,"/",2))
+ratio$X1<-as.numeric(ratio$X1)
+ratio$X2<-as.numeric(ratio$X2)
+ratio$ratio<-paste0(ratio$X1 /ratio$X2)
+Bubble1<-data.frame(Bubble[,10])
+Bubble1$zscore<-as.numeric(Bubble$Count)
+Bubble1$adj_pval<-as.numeric(Bubble$p.adjust)
+Bubble1$count<-as.numeric(ratio$ratio)
+Bubble1$ID<-Bubble$ID
+Bubble1$term<-Bubble$Description
+names(Bubble1)<-c("category" ,"zscore" ,       "adj_pval"  ,   "count"    ,    "ID",           "term"  )
+p<-GOBubble(Bubble1, title = 'Bubble plot', colour = c('palegreen4', 'orangered'), display = 'single', labels = 10,ID=F,table.col=F,bg.col=F,table.legend = F)  
+m<-GOBubble(Bubble1, title = 'Bubble plot', colour = c('palegreen4', 'orangered'), display = 'multiple', labels = 10,ID=F,table.col=F,bg.col=F)  
+ggsave("IEC_EGF_positive_negative/enrichment/BP_low_bubble_single.pdf" ,plot = p, device = NULL, path = NULL)
+ggsave("IEC_EGF_positive_negative/enrichment/BP_low_bubble_multiple.pdf" ,plot = m, device = NULL, path = NULL,width = 10, height = 4)
+
+
+
+
+
+Positive_high_CC_bubble<-data.frame(Positive_high_go_CC)
+Positive_high_CC_bubble$category<-"Positive_high_go_CC"
+Positive_high_CC_bubble$rank<-rank(Positive_high_CC_bubble$p.adjust)
+Positive_high_CC_bubble<-Positive_high_CC_bubble[Positive_high_CC_bubble$rank<11,]
+Positive_medium_CC_bubble<-data.frame(Positive_medium_go_CC)
+Positive_medium_CC_bubble$category<-"Positive_medium_go_CC"
+Positive_medium_CC_bubble$rank<-rank(Positive_medium_CC_bubble$p.adjust)
+Positive_medium_CC_bubble<-Positive_medium_CC_bubble[Positive_medium_CC_bubble$rank<11,]
+Positive_low_CC_bubble<-data.frame(Positive_low_go_CC)
+Positive_low_CC_bubble$category<-"Positive_low_go_CC"
+Positive_low_CC_bubble$rank<-rank(Positive_low_CC_bubble$p.adjust)
+Positive_low_CC_bubble<-Positive_low_CC_bubble[Positive_low_CC_bubble$rank<11,]
+Negative_high_CC_bubble<-data.frame(Negative_high_go_CC)
+Negative_high_CC_bubble$category<-"Negative_high_go_CC"
+Negative_high_CC_bubble$rank<-rank(Negative_high_CC_bubble$p.adjust)
+Negative_high_CC_bubble<-Negative_high_CC_bubble[Negative_high_CC_bubble$rank<11,]
+Negative_medium_CC_bubble<-data.frame(Negative_medium_go_CC)
+Negative_medium_CC_bubble$category<-"Negative_medium_go_CC"
+Negative_medium_CC_bubble$rank<-rank(Negative_medium_CC_bubble$p.adjust)
+Negative_medium_CC_bubble<-Negative_medium_CC_bubble[Negative_medium_CC_bubble$rank<11,]
+Negative_low_CC_bubble<-data.frame(Negative_low_go_CC)
+Negative_low_CC_bubble$category<-"Negative_low_go_CC"
+Negative_low_CC_bubble$rank<-rank(Negative_low_CC_bubble$p.adjust)
+Negative_low_CC_bubble<-Negative_low_CC_bubble[Negative_low_CC_bubble$rank<11,]
+Positive_high_CC_bubble$Description<-paste0(Positive_high_CC_bubble$Description,"-Positive")
+Positive_medium_CC_bubble$Description<-paste0(Positive_medium_CC_bubble$Description,"-Positive")
+Positive_low_CC_bubble$Description<-paste0(Positive_low_CC_bubble$Description,"-Positive")
+Negative_high_CC_bubble$Description<-paste0(Negative_high_CC_bubble$Description,"-Negative")
+Negative_medium_CC_bubble$Description<-paste0(Negative_medium_CC_bubble$Description,"-Negative")
+Negative_low_CC_bubble$Description<-paste0(Negative_low_CC_bubble$Description,"-Negative")
+Bubble_CC_high<-rbind(Positive_high_CC_bubble,Negative_high_CC_bubble)
+Bubble<-Bubble_CC_high
+ratio<-data.frame(str_split_fixed(Bubble$GeneRatio,"/",2))
+ratio$X1<-as.numeric(ratio$X1)
+ratio$X2<-as.numeric(ratio$X2)
+ratio$ratio<-paste0(ratio$X1 /ratio$X2)
+Bubble1<-data.frame(Bubble[,10])
+Bubble1$zscore<-as.numeric(Bubble$Count)
+Bubble1$adj_pval<-as.numeric(Bubble$p.adjust)
+Bubble1$count<-as.numeric(ratio$ratio)
+Bubble1$ID<-Bubble$ID
+Bubble1$term<-Bubble$Description
+names(Bubble1)<-c("category" ,"zscore" ,       "adj_pval"  ,   "count"    ,    "ID",           "term"  )
+p<-GOBubble(Bubble1, title = 'Bubble plot', colour = c('palegreen4', 'orangered'), display = 'single', labels = 15,ID=F,table.col=F,bg.col=F,table.legend = F)  
+m<-GOBubble(Bubble1, title = 'Bubble plot', colour = c('palegreen4', 'orangered'), display = 'multiple', labels = 10,ID=F,table.col=F,bg.col=F)  
+ggsave("IEC_EGF_positive_negative/enrichment/CC_high_bubble_single.pdf" ,plot = p, device = NULL, path = NULL)
+ggsave("IEC_EGF_positive_negative/enrichment/CC_high_bubble_multiple.pdf" ,plot = m, device = NULL, path = NULL,width = 10, height = 4)
+Bubble_CC_medium<-rbind(Positive_medium_CC_bubble,Negative_medium_CC_bubble)
+Bubble<-Bubble_CC_medium
+ratio<-data.frame(str_split_fixed(Bubble$GeneRatio,"/",2))
+ratio$X1<-as.numeric(ratio$X1)
+ratio$X2<-as.numeric(ratio$X2)
+ratio$ratio<-paste0(ratio$X1 /ratio$X2)
+Bubble1<-data.frame(Bubble[,10])
+Bubble1$zscore<-as.numeric(Bubble$Count)
+Bubble1$adj_pval<-as.numeric(Bubble$p.adjust)
+Bubble1$count<-as.numeric(ratio$ratio)
+Bubble1$ID<-Bubble$ID
+Bubble1$term<-Bubble$Description
+names(Bubble1)<-c("category" ,"zscore" ,       "adj_pval"  ,   "count"    ,    "ID",           "term"  )
+p<-GOBubble(Bubble1, title = 'Bubble plot', colour = c('palegreen4', 'orangered'), display = 'single', labels = 10,ID=F,table.col=F,bg.col=F,table.legend = F)  
+m<-GOBubble(Bubble1, title = 'Bubble plot', colour = c('palegreen4', 'orangered'), display = 'multiple', labels = 10,ID=F,table.col=F,bg.col=F)  
+ggsave("IEC_EGF_positive_negative/enrichment/CC_medium_bubble_single.pdf" ,plot = p, device = NULL, path = NULL)
+ggsave("IEC_EGF_positive_negative/enrichment/CC_medium_bubble_multiple.pdf" ,plot = m, device = NULL, path = NULL,width = 10, height = 4)
+Bubble_CC_low<-rbind(Positive_low_CC_bubble,Negative_low_CC_bubble)
+Bubble<-Bubble_CC_low
+ratio<-data.frame(str_split_fixed(Bubble$GeneRatio,"/",2))
+ratio$X1<-as.numeric(ratio$X1)
+ratio$X2<-as.numeric(ratio$X2)
+ratio$ratio<-paste0(ratio$X1 /ratio$X2)
+Bubble1<-data.frame(Bubble[,10])
+Bubble1$zscore<-as.numeric(Bubble$Count)
+Bubble1$adj_pval<-as.numeric(Bubble$p.adjust)
+Bubble1$count<-as.numeric(ratio$ratio)
+Bubble1$ID<-Bubble$ID
+Bubble1$term<-Bubble$Description
+names(Bubble1)<-c("category" ,"zscore" ,       "adj_pval"  ,   "count"    ,    "ID",           "term"  )
+p<-GOBubble(Bubble1, title = 'Bubble plot', colour = c('palegreen4', 'orangered'), display = 'single', labels = 10,ID=F,table.col=F,bg.col=F,table.legend = F)  
+m<-GOBubble(Bubble1, title = 'Bubble plot', colour = c('palegreen4', 'orangered'), display = 'multiple', labels = 10,ID=F,table.col=F,bg.col=F)  
+ggsave("IEC_EGF_positive_negative/enrichment/CC_low_bubble_single.pdf" ,plot = p, device = NULL, path = NULL)
+ggsave("IEC_EGF_positive_negative/enrichment/CC_low_bubble_multiple.pdf" ,plot = m, device = NULL, path = NULL,width = 10, height = 4)
+
+
+
+
+Positive_high_KEGG_bubble<-data.frame(Positive_high_KEGG)
+Positive_high_KEGG_bubble$category<-"Positive_high_KEGG"
+Positive_high_KEGG_bubble$rank<-rank(Positive_high_KEGG_bubble$p.adjust)
+Positive_high_KEGG_bubble<-Positive_high_KEGG_bubble[Positive_high_KEGG_bubble$rank<11,]
+Positive_medium_KEGG_bubble<-data.frame(Positive_medium_KEGG)
+Positive_medium_KEGG_bubble$category<-"Positive_medium_KEGG"
+Positive_medium_KEGG_bubble$rank<-rank(Positive_medium_KEGG_bubble$p.adjust)
+Positive_medium_KEGG_bubble<-Positive_medium_KEGG_bubble[Positive_medium_KEGG_bubble$rank<11,]
+Positive_low_KEGG_bubble<-data.frame(Positive_low_KEGG)
+Positive_low_KEGG_bubble$category<-"Positive_low_KEGG"
+Positive_low_KEGG_bubble$rank<-rank(Positive_low_KEGG_bubble$p.adjust)
+Positive_low_KEGG_bubble<-Positive_low_KEGG_bubble[Positive_low_KEGG_bubble$rank<11,]
+Negative_high_KEGG_bubble<-data.frame(Negative_high_KEGG)
+Negative_high_KEGG_bubble$category<-"Negative_high_KEGG"
+Negative_high_KEGG_bubble$rank<-rank(Negative_high_KEGG_bubble$p.adjust)
+Negative_high_KEGG_bubble<-Negative_high_KEGG_bubble[Negative_high_KEGG_bubble$rank<11,]
+Negative_medium_KEGG_bubble<-data.frame(Negative_medium_KEGG)
+Negative_medium_KEGG_bubble$category<-"Negative_medium_KEGG"
+Negative_medium_KEGG_bubble$rank<-rank(Negative_medium_KEGG_bubble$p.adjust)
+Negative_medium_KEGG_bubble<-Negative_medium_KEGG_bubble[Negative_medium_KEGG_bubble$rank<11,]
+Negative_low_KEGG_bubble<-data.frame(Negative_low_KEGG)
+Negative_low_KEGG_bubble$category<-"Negative_low_KEGG"
+Negative_low_KEGG_bubble$rank<-rank(Negative_low_KEGG_bubble$p.adjust)
+Negative_low_KEGG_bubble<-Negative_low_KEGG_bubble[Negative_low_KEGG_bubble$rank<11,]
+Positive_high_KEGG_bubble$Description<-paste0(Positive_high_KEGG_bubble$Description,"-Positive")
+Positive_medium_KEGG_bubble$Description<-paste0(Positive_medium_KEGG_bubble$Description,"-Positive")
+Positive_low_KEGG_bubble$Description<-paste0(Positive_low_KEGG_bubble$Description,"-Positive")
+Negative_high_KEGG_bubble$Description<-paste0(Negative_high_KEGG_bubble$Description,"-Negative")
+Negative_medium_KEGG_bubble$Description<-paste0(Negative_medium_KEGG_bubble$Description,"-Negative")
+Negative_low_KEGG_bubble$Description<-paste0(Negative_low_KEGG_bubble$Description,"-Negative")
+Bubble_KEGG_high<-rbind(Positive_high_KEGG_bubble,Negative_high_KEGG_bubble)
+Bubble<-Bubble_KEGG_high
+ratio<-data.frame(str_split_fixed(Bubble$GeneRatio,"/",2))
+ratio$X1<-as.numeric(ratio$X1)
+ratio$X2<-as.numeric(ratio$X2)
+ratio$ratio<-paste0(ratio$X1 /ratio$X2)
+Bubble1<-data.frame(Bubble[,10])
+Bubble1$zscore<-as.numeric(Bubble$Count)
+Bubble1$adj_pval<-as.numeric(Bubble$p.adjust)
+Bubble1$count<-as.numeric(ratio$ratio)
+Bubble1$ID<-Bubble$ID
+Bubble1$term<-Bubble$Description
+names(Bubble1)<-c("category" ,"zscore" ,       "adj_pval"  ,   "count"    ,    "ID",           "term"  )
+p<-GOBubble(Bubble1, title = 'Bubble plot', colour = c('palegreen4', 'orangered'), display = 'single', labels = 15,ID=F,table.col=F,bg.col=F,table.legend = F)  
+m<-GOBubble(Bubble1, title = 'Bubble plot', colour = c('palegreen4', 'orangered'), display = 'multiple', labels = 10,ID=F,table.col=F,bg.col=F)  
+ggsave("IEC_EGF_positive_negative/enrichment/KEGG_high_bubble_single.pdf" ,plot = p, device = NULL, path = NULL)
+ggsave("IEC_EGF_positive_negative/enrichment/KEGG_high_bubble_multiple.pdf" ,plot = m, device = NULL, path = NULL,width = 10, height = 4)
+Bubble_KEGG_medium<-rbind(Positive_medium_KEGG_bubble,Negative_medium_KEGG_bubble)
+Bubble<-Bubble_KEGG_medium
+ratio<-data.frame(str_split_fixed(Bubble$GeneRatio,"/",2))
+ratio$X1<-as.numeric(ratio$X1)
+ratio$X2<-as.numeric(ratio$X2)
+ratio$ratio<-paste0(ratio$X1 /ratio$X2)
+Bubble1<-data.frame(Bubble[,10])
+Bubble1$zscore<-as.numeric(Bubble$Count)
+Bubble1$adj_pval<-as.numeric(Bubble$p.adjust)
+Bubble1$count<-as.numeric(ratio$ratio)
+Bubble1$ID<-Bubble$ID
+Bubble1$term<-Bubble$Description
+names(Bubble1)<-c("category" ,"zscore" ,       "adj_pval"  ,   "count"    ,    "ID",           "term"  )
+p<-GOBubble(Bubble1, title = 'Bubble plot', colour = c('palegreen4', 'orangered'), display = 'single', labels = 10,ID=F,table.col=F,bg.col=F,table.legend = F)  
+m<-GOBubble(Bubble1, title = 'Bubble plot', colour = c('palegreen4', 'orangered'), display = 'multiple', labels = 10,ID=F,table.col=F,bg.col=F)  
+ggsave("IEC_EGF_positive_negative/enrichment/KEGG_medium_bubble_single.pdf" ,plot = p, device = NULL, path = NULL)
+ggsave("IEC_EGF_positive_negative/enrichment/KEGG_medium_bubble_multiple.pdf" ,plot = m, device = NULL, path = NULL,width = 10, height = 4)
+Bubble_KEGG_low<-rbind(Positive_low_KEGG_bubble,Negative_low_KEGG_bubble)
+Bubble<-Bubble_KEGG_low
+ratio<-data.frame(str_split_fixed(Bubble$GeneRatio,"/",2))
+ratio$X1<-as.numeric(ratio$X1)
+ratio$X2<-as.numeric(ratio$X2)
+ratio$ratio<-paste0(ratio$X1 /ratio$X2)
+Bubble1<-data.frame(Bubble[,10])
+Bubble1$zscore<-as.numeric(Bubble$Count)
+Bubble1$adj_pval<-as.numeric(Bubble$p.adjust)
+Bubble1$count<-as.numeric(ratio$ratio)
+Bubble1$ID<-Bubble$ID
+Bubble1$term<-Bubble$Description
+names(Bubble1)<-c("category" ,"zscore" ,       "adj_pval"  ,   "count"    ,    "ID",           "term"  )
+p<-GOBubble(Bubble1, title = 'Bubble plot', colour = c('palegreen4', 'orangered'), display = 'single', labels = 10,ID=F,table.col=F,bg.col=F,table.legend = F)  
+m<-GOBubble(Bubble1, title = 'Bubble plot', colour = c('palegreen4', 'orangered'), display = 'multiple', labels = 10,ID=F,table.col=F,bg.col=F)  
+ggsave("IEC_EGF_positive_negative/enrichment/KEGG_low_bubble_single.pdf" ,plot = p, device = NULL, path = NULL)
+ggsave("IEC_EGF_positive_negative/enrichment/KEGG_low_bubble_multiple.pdf" ,plot = m, device = NULL, path = NULL,width = 10, height = 4)
+
+
+###calculate  SH2 A00000 in each fraction 
+P_SH2<-Positive[row.names(Positive) == "A00000",]
+P_SH2<-data.frame(t(P_SH2))
+P_SH2$Fraction<-row.names(P_SH2)
+P_SH2$group<-"EGF+"
+N_SH2<-Negative[row.names(Negative) == "A00000",]
+N_SH2<-data.frame(t(N_SH2))
+N_SH2$Fraction<-row.names(N_SH2)
+N_SH2$group<-"EGF-"
+SH2<-rbind(N_SH2,P_SH2)
+SH2$value<-(SH2$A00000)
+SH2$Fraction<-gsub("N|P","",SH2$Fraction)
+p<- ggplot(SH2, aes(x=Fraction, y=value,group=group,color=group)) + 
+  geom_line() +
+  geom_point()+
+ylim(0,1.2*max(SH2$value))
+print(p)
+# Finished line plot
+pp<-p+labs(title="", x="Fraction number", y = "SH2 superbinder  intensity")+
+   theme_classic() +
+   scale_color_manual(values=c('#999999','#E69F00'))
+ggsave(plot = pp,"SH2_in_Fraction_intensity.pdf",device = NULL)
+
+
+SH2<-rbind(N_SH2,P_SH2)
+SH2$value<-log2(SH2$A00000)
+SH2$Fraction<-gsub("N|P","",SH2$Fraction)
+p<- ggplot(SH2, aes(x=Fraction, y=value,group=group,color=group)) + 
+  geom_line() +
+  geom_point()+
+ylim(0,1.2*max(SH2$value))
+pp<-p+labs(title="", x="Fraction number", y = "log2 (SH2 superbinder  intensity)")+
+   theme_classic() +
+   scale_color_manual(values=c('#999999','#E69F00'))
+ggsave(plot = pp,"SH2_in_Fraction_log2intensity.pdf",device = NULL)
+
+
+###Calculate SH2 peptides in each file
+pr<-read_delim("input_data/lib_free_with_sh2Fasta_report.pr_matrix.tsv", 
+ delim = "\t", escape_double = FALSE,  trim_ws = TRUE)
+pr1<-pr[pr$Protein.Group== "A00000",-c(1:10)]
+names(pr1)<-data.frame(str_split_fixed(names(pr1), "-", 10))[, 3]
+names(pr1)<-gsub(".mzML","",names(pr1))
+pr1<-pr1[,-grep("30",names(pr1))]
+row.names(pr1)<-as.matrix(pr[pr$Protein.Group== "A00000",10])
+pr_num<- data.frame(t(apply(!is.na(pr1), 2, sum)))
+positive_SH2_pr<-as.matrix(pr_num[,grep("P",names(pr_num))])
+names(positive_SH2_pr)<-gsub("P","",names(positive_SH2_pr))
+row.names(positive_SH2_pr)<-c("Positive_SH2_pr")
+
+Negative_SH2_pr<-as.matrix(pr_num[,grep("N",names(pr_num))])
+names(Negative_SH2_pr)<-gsub("N","",names(Negative_SH2_pr))
+row.names(Negative_SH2_pr)<-c("Negative_SH2_pr")
+
+pdf(
+  "SH2_pr_number_statistics.pdf"
+)
+p <-
+  barplot(
+    rbind(positive_SH2_pr, Negative_SH2_pr),
+    beside = TRUE,
+     col = c("#87CEEB", "#E6E6FA"),
+    names.arg = names(positive_SH2_pr),
+    legend = c("EGF+", "EGF-"),
+    ylab = "SH2 Precusor Numbers",
+    ylim = c(0, max(positive_SH2_pr) * 1.3)
+  )
+
+# text(x = p[1, ], y = positive_SH2_pr + 5, positive_SH2_pr, col = "black")
+# text(x = p[2, ],
+#      y = Negative_SH2_pr + 5,
+#      Negative_SH2_pr,
+#      col = "black")
+dev.off()
+
+
+
+#corr SH2 Precusor IEC intensity protein number  
+rm(list = ls())
+library(ggplot2)
+library(stringr)
+library(RColorBrewer)
+library(reshape2)
+library(readxl)
+library(readr)
+library(dplyr)
+df <-read.delim(
+    "input_data/lib_free_with_sh2Fasta_report.pg_matrix.tsv",
+    header = TRUE
+  )
+names(df)[-c(1:5)] <-
+  data.frame(str_split_fixed(names(df)[-c(1:5)], "\\.", 10))[, 8]
+##delete N30 P30
+df<-df[,-grep("30",names(df))]
+write.csv(df,"ts2.csv")
+
+df1<-df[,-c(1:5)]
+row.names(df1)<-df[,1]
+
+Positive<-df1[,grep("P",names(df1))]
+Positive<- Positive[apply(Positive, 1, function(x) !all(is.na(x))), ]
+Negative<-df1[,grep("N",names(df1))]
+Negative<- Negative[apply(Negative, 1, function(x) !all(is.na(x))), ]
+
+###Stats
+Positive_pg <- apply(!is.na(Positive), 2, sum)
+Positive_proteotypic <-
+apply(!is.na(Positive[-grep(";", row.names(Positive)),]), 2, sum)
+Negative_pg <- apply(!is.na(Negative), 2, sum)
+Negative_proteotypic <-
+apply(!is.na(Negative[-grep(";", row.names(Negative)),]), 2, sum)
+
+  
+
+###Calculate SH2 peptides in each file
+pr<-read_delim("input_data/lib_free_with_sh2Fasta_report.pr_matrix.tsv", 
+ delim = "\t", escape_double = FALSE,  trim_ws = TRUE)
+pr1<-pr[pr$Protein.Group== "A00000",-c(1:10)]
+names(pr1)<-data.frame(str_split_fixed(names(pr1), "-", 10))[, 3]
+names(pr1)<-gsub(".mzML","",names(pr1))
+pr1<-pr1[,-grep("30",names(pr1))]
+row.names(pr1)<-as.matrix(pr[pr$Protein.Group== "A00000",10])
+pr_num<- data.frame(t(apply(!is.na(pr1), 2, sum)))
+positive_SH2_pr<-as.matrix(pr_num[,grep("P",names(pr_num))])
+names(positive_SH2_pr)<-gsub("P","",names(positive_SH2_pr))
+row.names(positive_SH2_pr)<-c("Positive_SH2_pr")
+
+Negative_SH2_pr<-as.matrix(pr_num[,grep("N",names(pr_num))])
+names(Negative_SH2_pr)<-gsub("N","",names(Negative_SH2_pr))
+row.names(Negative_SH2_pr)<-c("Negative_SH2_pr")
+
+
+
+
+##IEC intensity
+
+Positive_IEC<- read_delim("input_data/EGF+.txt",   delim = "\t", escape_double = FALSE,   trim_ws = TRUE) %>%
+  as.data.frame()
+
+from<-which(Positive_IEC$`[Header]`=="Wavelength(nm)\t280nm")[1]+2
+to<-which(Positive_IEC$`[Header]`=="Wavelength(nm)\t215nm")[1]-8
+
+Positive_IEC2<-Positive_IEC %>%
+slice(from:to)
+Positive_IEC3<-str_split_fixed(pattern = "\t",string =Positive_IEC2$`[Header]`,2) %>%
+  as.data.frame() %>%
+  mutate(V1=as.numeric(V1))
+Positive_IEC4<-Positive_IEC3[Positive_IEC3$V1 %in% seq(19,85,2),] %>%
+  slice(-21)%>%
+  mutate(Fraction=seq(1,33,1))
+
+
+Negative_IEC <- read_delim("input_data/EGF-.txt", delim = "\t", escape_double = FALSE,  trim_ws = TRUE) %>%
+  as.data.frame()
+  
+from<-which(Negative_IEC$`[Header]`=="Wavelength(nm)\t280nm")[1]+2
+to<-which(Negative_IEC$`[Header]`=="Wavelength(nm)\t215nm")[1]-8
+
+Negative_IEC2<-Negative_IEC %>%
+slice(from:to)
+Negative_IEC3<-str_split_fixed(pattern = "\t",string =Negative_IEC2$`[Header]`,2) %>%
+  as.data.frame() %>%
+  mutate(V1=as.numeric(V1))
+Negative_IEC4<-Negative_IEC3[Negative_IEC3$V1 %in% seq(19,85,2),] %>%
+  slice(-21)%>%
+  mutate(Fraction=seq(1,33,1))
+
+  
+  corr_Positive<-data.frame(Positive_IEC4[,2],t(positive_SH2_pr),Positive_proteotypic) %>%
+  mutate(Fraction=seq(1,33,1))
+  
+  
+names(corr_Positive)<-c("IEC","SH2_PrNum","ProteinNum","Fraction")
+
+corr_Positive<-apply(corr_Positive,2,function (x) as.numeric (x))
+
+
+
+
+
+  corr_Negative<-data.frame(Negative_IEC4[,2],t(positive_SH2_pr),Negative_proteotypic) %>%
+  mutate(Fraction=seq(1,33,1))
+  names(corr_Negative)<-c("IEC","SH2_PrNum","ProteinNum","Fraction")
+corr_Negative<-apply(corr_Negative,2,function (x) as.numeric (x))
+
+library(corrplot)
+corr_Positive_plot<-cor(corr_Positive[,1:3],method="spearman" )
+pdf("corr_Positive_plot.pdf")
+p<-corrplot(corr_Positive_plot, type = 'lower')
+dev.off()
+
+pdf("corr_Negative_plot.pdf")
+corr_Negative_plot<-cor(corr_Negative[,1:3],method="spearman" )
+
+p<-corrplot(corr_Negative_plot, type = 'lower')
+dev.off()
+
+
+
+```
+
+
+
+```{r find protein complex peaks }
+rm(list = ls())
+library(ggplot2)
+library(stringr)
+library(RColorBrewer)
+library(reshape2)
+library(readxl)
+library(readr)
+df <-
+  read.delim("input_data/lib_free_with_sh2Fasta_report.pg_matrix.tsv",
+             header = TRUE)
+span = 0.3
+names(df)[-c(1:5)] <-
+  data.frame(str_split_fixed(names(df)[-c(1:5)], "\\.", 10))[, 8]
+##delete N30 P30
+df <- df[, -grep("30", names(df))]
+df1 <- df[, -c(1:5)]
+row.names(df1) <- df[, 1]
+Positive <- df1[, grep("P", names(df1))]
+Positive <-
+  Positive[apply(Positive, 1, function(x)
+    ! all(is.na(x))),]
+Positive_mat <- Positive
+Negative <- df1[, grep("N", names(df1))]
+Negative <-
+  Negative[apply(Negative, 1, function(x)
+    ! all(is.na(x))),]
+Negative_mat <- Negative
+allPPI <-
+  read.csv("input_data/Out.rf.comb.clust.csv",
+           header = F)
+row.names(allPPI) <- paste0("PPI", row.names(allPPI))
+
+
+###prepare PPI matrix
+PositiveTmp <-
+  Positive[row.names(Positive) %in% c(as.matrix(allPPI[1, ])), ]
+PositiveTmp <- data.frame(apply(PositiveTmp, 2, sum, na.rm = T))
+names(PositiveTmp) <- row.names(allPPI)[1]
+
+
+for (i in 2:nrow (allPPI)) {
+  PositiveTmp1 <-
+    Positive[row.names(Positive) %in% c(as.matrix(allPPI[i, ])), ]
+  PositiveTmp1 <- data.frame(apply(PositiveTmp1, 2, sum, na.rm = T))
+  names(PositiveTmp1) <- row.names(allPPI)[i]
+  PositiveTmp <- cbind(PositiveTmp, PositiveTmp1)
+}
+
+
+NegativeTmp <-
+  Negative[row.names(Negative) %in% c(as.matrix(allPPI[1, ])), ]
+NegativeTmp <- data.frame(apply(NegativeTmp, 2, sum, na.rm = T))
+names(NegativeTmp) <- row.names(allPPI)[1]
+
+for (i in 2:nrow (allPPI)) {
+  NegativeTmp1 <-
+    Negative[row.names(Negative) %in% c(as.matrix(allPPI[i, ])), ]
+  NegativeTmp1 <- data.frame(apply(NegativeTmp1, 2, sum, na.rm = T))
+  names(NegativeTmp1) <- row.names(allPPI)[i]
+  NegativeTmp <- cbind(NegativeTmp, NegativeTmp1)
+}
+
+####PPIs Peaks and area
+
+Positive <- data.frame(t(PositiveTmp))
+Negative <- data.frame(t(NegativeTmp))
+PPImatrix <- cbind(Positive, Negative)
+
+library(pracma)
+tmp_sum <-
+  data.frame("PPIs",
+             "fraction",
+             "pos",
+             "peak_high",
+             "peak_area",
+             "corr",
+             "cv")
+names(tmp_sum) <-
+  c("PPIs",
+    "fraction",
+    "pos",
+    "peak_high",
+    "peak_area",
+    "corr",
+    "cv")
+tmp_sum <- tmp_sum[-1,]
+
+for (i in row.names(Positive)) {
+  tmp <- c(as.matrix(Positive[row.names(Positive) == i, ]))
+  names(tmp) <- names(Positive)
+  smooth_tmp <- stats::loess(tmp ~ seq(1, length(tmp)), span = span)
+  par(mar = c(1, 1, 1, 1))
+  
+  plot(
+    seq(1, length(tmp)),
+    smooth_tmp$fitted,
+    type = "l",
+    xlab = "",
+    ylab = ""
+  )
+  dev.off()
+  peaks1 <-
+    data.frame(findpeaks(smooth_tmp$fitted, nups = 1, ndowns = 1))
+  row.names(peaks1) <- names(tmp)[peaks1[, 2]]
+  peak_area <- c()
+  corr <- c()
+  cv <- c()
+  
+  for (a in 1:nrow(peaks1)) {
+    start <- peaks1[a, 3]
+    end <- peaks1[a, 4]
+    if (start < 1) {
+      start <- 1
+    }
+    if (end > length(tmp)) {
+      end <- length(tmp)
+    }
+    
+    peak <- function(x) {
+      approx(seq(1, length(tmp)), smooth_tmp$fitted, x)$y
+    }
+    peak_area0 <-
+      integrate(peak, start, end)$value
+    peak_area <- c(peak_area, peak_area0)
+    
+    protInPPI <- c(as.matrix(allPPI[row.names(allPPI) == i, ]))
+    protInPPI <- protInPPI[protInPPI != ""]
+    
+    Positive_mat_tmp <-
+      Positive_mat[row.names(Positive_mat) %in% protInPPI, ]
+    Positive_mat_tmp1 <- rbind(Positive_mat_tmp, tmp)
+    row.names(Positive_mat_tmp1)[nrow(Positive_mat_tmp1)] <- i
+    Positive_mat_tmp2 <- Positive_mat_tmp1[, c(start:end)]
+    Positive_mat_tmp2 <-
+      Positive_mat_tmp2[rowSums(is.na(Positive_mat_tmp2)) < ncol(Positive_mat_tmp2) * 0.7,]
+    
+    Positive_mat_tmp2 <-
+      Positive_mat_tmp2[-grep("PPI", row.names(Positive_mat_tmp2)), ]
+    
+    Positive_mat_tmp3 <- Positive_mat_tmp2
+    names(Positive_mat_tmp3) <- names(Positive_mat_tmp2)
+    cv0 <-
+      mean(apply(Positive_mat_tmp3, 1, function (x) {
+        sd (x, na.rm = T) / mean(x, na.rm = T)
+      }))
+    cv <- c(cv, cv0)
+    Positive_mat_tmp3[is.na(Positive_mat_tmp3)] <- 0
+    if (nrow(Positive_mat_tmp3) < 2)
+    {
+      corr0 <- 0
+    } else{
+      corr0 <- cor(t(Positive_mat_tmp3),
+                   method = "pearson",
+                   use = "everything")
+      corr0[is.na(corr0)] <- 0
+      diag(corr0) <- NA
+      corr0 <- mean(corr0, na.rm = T)
+    }
+    corr <- c(corr, corr0)
+    
+  }
+  
+  tmp_sum0 <-
+    data.frame("PPIs",
+               row.names(peaks1),
+               peaks1[, 2],
+               peaks1[, 1],
+               peaks1[, 3],
+               peaks1[, 4],
+               peak_area,
+               corr,
+               cv)
+  names(tmp_sum0) <-
+    c("PPIs",
+      "fraction",
+      "pos",
+      "peak_high",
+      "start",
+      "end",
+      "peak_area",
+      "corr",
+      "cv")
+  tmp_sum0$PPIs <- paste0(i)
+  tmp_sum <- rbind(tmp_sum0, tmp_sum)
+}
+Positive_protein_peak <- tmp_sum
+
+tmp_sum <-
+  data.frame("PPIs",
+             "fraction",
+             "pos",
+             "peak_high",
+             "peak_area",
+             "corr",
+             "cv")
+names(tmp_sum) <-
+  c("PPIs",
+    "fraction",
+    "pos",
+    "peak_high",
+    "peak_area",
+    "corr",
+    "cv")
+tmp_sum <- tmp_sum[-1,]
+
+for (i in  row.names(Negative)) {
+  tmp <- c(as.matrix(Negative[row.names(Negative) == i, ]))
+  names(tmp) <- names(Negative)
+  smooth_tmp <- stats::loess(tmp ~ seq(1, length(tmp)), span = span)
+  par(mar = c(1, 1, 1, 1))
+  plot(
+    seq(1, length(tmp)),
+    smooth_tmp$fitted,
+    type = "l",
+    xlab = "",
+    ylab = ""
+  )
+  dev.off()
+  peaks1 <-
+    data.frame(findpeaks(smooth_tmp$fitted, nups = 1, ndowns = 1))
+  row.names(peaks1) <- names(tmp)[peaks1[, 2]]
+  peak_area <- c()
+  corr <- c()
+  cv <- c()
+  for (a in  1:nrow(peaks1)) {
+    # start<-peaks1[a,2]-3
+    #  end<-peaks1[a,2]+3
+    start <- peaks1[a, 3]
+    end <- peaks1[a, 4]
+    
+    if (start < 1) {
+      start <- 1
+    }
+    if (end > length(tmp)) {
+      end <- length(tmp)
+    }
+    
+    peak <- function(x) {
+      approx(seq(1, length(tmp)), smooth_tmp$fitted, x)$y
+    }
+    peak_area0 <-
+      integrate(peak, start, end)$value
+    peak_area <- c(peak_area, peak_area0)
+    protInPPI <- c(as.matrix(allPPI[row.names(allPPI) == i, ]))
+    protInPPI <- protInPPI[protInPPI != ""]
+    Negative_mat_tmp <-
+      Negative_mat[row.names(Negative_mat) %in% protInPPI, ]
+    Negative_mat_tmp1 <- rbind(Negative_mat_tmp, tmp)
+    row.names(Negative_mat_tmp1)[nrow(Negative_mat_tmp1)] <- i
+    Negative_mat_tmp2 <- Negative_mat_tmp1[, c(start:end)]
+    Negative_mat_tmp2 <-
+      Negative_mat_tmp2[rowSums(is.na(Negative_mat_tmp2)) < ncol(Negative_mat_tmp2) * 0.7,]
+    Negative_mat_tmp2 <-
+      Negative_mat_tmp2[-grep("PPI", row.names(Negative_mat_tmp2)), ]
+    Negative_mat_tmp3 <-
+      Negative_mat_tmp2
+    names(Negative_mat_tmp3) <- names(Negative_mat_tmp3)
+    
+    
+    cv0 <-
+      mean(apply(Negative_mat_tmp3, 1, function (x) {
+        sd (x, na.rm = T) / mean(x, na.rm = T)
+      }))
+    cv <- c(cv, cv0)
+    Negative_mat_tmp3[is.na(Negative_mat_tmp3)] <- 0
+    
+    if (nrow(Negative_mat_tmp3) < 2)
+    {
+      corr0 <- 0
+    } else{
+      corr0 <- cor(t(Negative_mat_tmp3),
+                   method = "pearson",
+                   use = "everything")
+      corr0[is.na(corr0)] <- 0
+      diag(corr0) <- NA
+      corr0 <- mean(corr0, na.rm = T)
+    }
+    corr <- c(corr, corr0)
+    
+  }
+  tmp_sum0 <-
+    data.frame("PPIs",
+               row.names(peaks1),
+               peaks1[, 2],
+               peaks1[, 1],
+               peaks1[, 3],
+               peaks1[, 4],
+               peak_area,
+               corr,
+               cv)
+  names(tmp_sum0) <-
+    c("PPIs",
+      "fraction",
+      "pos",
+      "peak_high",
+      "start",
+      "end",
+      "peak_area",
+      "corr",
+      "cv")
+  tmp_sum0$PPIs <- paste0(i)
+  tmp_sum <- rbind(tmp_sum0, tmp_sum)
+}
+Negative_protein_peak <- tmp_sum
+Positive_protein_peak$label <- "Positive"
+Negative_protein_peak$label <- "Negative"
+PPIs_peaks <- rbind(Positive_protein_peak, Negative_protein_peak)
+PPIs_peaks$width <- PPIs_peaks$end - PPIs_peaks$start
+PPIs_peaks_raw <- PPIs_peaks
+write.csv(PPIs_peaks_raw, "PPIs_peaks_raw_all.csv")
+```
+
+```{r select peaks}
+#PPIs_peaks_select
+#peak hight and width
+library(dplyr)
+PPIs_peaks_select<-PPIs_peaks_raw
+PPIs_peaks_select1<-PPIs_peaks_select %>%
+    group_by(PPIs) %>%
+    mutate(intensity_ratio = peak_high / max(peak_high))
+pdf(
+    "PPI_select_hight_width2.pdf",
+    width = 6,
+    height = 6
+  )
+  plot(
+    PPIs_peaks_select1$width,PPIs_peaks_select1$intensity_ratio,
+    col = "#00000033",
+    pch = 19,
+    cex = 1,
+    xlab = paste("peak width"),
+    ylab = "peak high/max peak high",
+    main = "select by peak with and peak high"
+ )
+  point <-
+    subset(PPIs_peaks_select1,
+           PPIs_peaks_select1$width>6 &
+            PPIs_peaks_select1$intensity_ratio > 0.2)
+ 
+  write.csv(point, file = "PPI_select_hight_width2.csv")
+  points(
+    point$width,
+       point$intensity_ratio,
+    col = 1,
+    bg = "#FFA07A",
+    pch = 21,
+    cex = 1.5
+  )
+legend("topright", legend=c(nrow(PPIs_peaks_select1),nrow(point)), col=c("#00000033", "#FFA07A"), lty=1)
+  
+abline(h = 0.2,
+       v = c(6),
+       lty = 2,
+       lwd = 1)
+  dev.off()
+#peak cv and corr
+peak_corr_cv<-point
+PPIs_peaks_select_both<-peak_corr_cv[peak_corr_cv$corr>0.6 & peak_corr_cv$cv>0.5, ]
+ pdf(
+    "PPI_select_corr_cv2.pdf",
+    width = 6,
+    height = 6
+  )
+  plot(
+    peak_corr_cv$corr,peak_corr_cv$cv,
+    col = "#FFA07A",
+    pch = 19,
+    cex = 1,
+    xlab = paste("Pearson Correlation"),
+    ylab = "coefficient of variation",
+    main = "select by peak cv and corr"
+ )
+
+points(
+    PPIs_peaks_select_both$corr,
+       PPIs_peaks_select_both$cv,
+    col = 1,
+    bg = "#E64B35CC",
+    pch = 21,
+    cex = 1.5
+  )
+
+legend("topright", legend=c(nrow(peak_corr_cv),nrow(PPIs_peaks_select_both)), col=c("#FFA07A", "#E64B35CC"), lty=1)
+
+
+abline(
+    h = 0.5,
+    v = c(0.6),
+    lty = 2,
+    lwd = 1
+  )
+  dev.off()
+
+  write.csv(PPIs_peaks_select_both,"select_295peaks.csv")
+  
+  
+```
+
+
+
+```{r quantative protein complex matrix}
+peak_corr_cv<-point
+### PPIs_peaks_select from positive and negative
+PPIs_peaks_select_both<-peak_corr_cv[peak_corr_cv$corr>0.6 & peak_corr_cv$cv>0.5, ]
+PPIs_peaks_select_both$real_pos<-PPIs_peaks_select_both$pos
+PPIs_peaks_select_both_add1<-PPIs_peaks_select_both
+PPIs_peaks_select_both_add1$pos<-PPIs_peaks_select_both_add1$pos+1
+PPIs_peaks_select_both_add1$state<-"F"
+PPIs_peaks_select_both_delet1<-PPIs_peaks_select_both
+PPIs_peaks_select_both_delet1$pos<-PPIs_peaks_select_both_delet1$pos-1 
+PPIs_peaks_select_both_delet1$state<-"F"
+PPIs_peaks_select_both$state<-"T"
+PPIs_peaks_select_both_all<-rbind(PPIs_peaks_select_both,PPIs_peaks_select_both_add1,PPIs_peaks_select_both_delet1)
+PPIs_peaks_select_both_all$peak<-paste0(PPIs_peaks_select_both_all$PPIs,"_",PPIs_peaks_select_both_all$pos)
+dup<-PPIs_peaks_select_both_all[duplicated(PPIs_peaks_select_both_all$peak),]
+PPIs_peaks_select_both_all_dup<-PPIs_peaks_select_both_all[PPIs_peaks_select_both_all$peak %in% dup$peak,]
+PPIs_peaks_select_both_all_dup$re_pos <- ave(PPIs_peaks_select_both_all_dup$real_pos, PPIs_peaks_select_both_all_dup$peak, FUN = mean)
+PPIs_peaks_select_both_all_dup$peak<-paste0(PPIs_peaks_select_both_all_dup$PPIs,"_",PPIs_peaks_select_both_all_dup$re_pos)
+PPIs_peaks_select_both_all_dup1<-PPIs_peaks_select_both_all_dup[PPIs_peaks_select_both_all_dup$state=="T",]
+PPIs_peaks_select_both$subpeak<-paste0(PPIs_peaks_select_both$PPIs,"_",PPIs_peaks_select_both$fraction)
+PPIs_peaks_select_both_all_dup1$subpeak<-paste0(PPIs_peaks_select_both_all_dup1$PPIs,"_",PPIs_peaks_select_both_all_dup1$fraction)
+PPIs_peaks_select_both$label2<-PPIs_peaks_select_both$label
+PPIs_peaks_select_both$label2[which(PPIs_peaks_select_both$subpeak %in% PPIs_peaks_select_both_all_dup1$subpeak)]<-"both"
+
+for (i in unique(PPIs_peaks_select_both$PPIs)[1]) {
+  
+  
+  PPIs_peaks<-PPIs_peaks_select_both[PPIs_peaks_select_both$PPIs==i,]
+  
+  if (length(PPIs_peaks$PPIs)>1){
+    
+      PPIs_peaks<-PPIs_peaks[ PPIs_peaks$corr == max(PPIs_peaks$corr) ,]
+  }
+  
+  
+PPIs_peaks<-PPIs_peaks
+  
+}
+
+for (i in unique(PPIs_peaks_select_both$PPIs)) {
+  
+  
+  PPIs_peaks0<-PPIs_peaks_select_both[PPIs_peaks_select_both$PPIs==i,]
+  
+  if (length(PPIs_peaks0$PPIs)>1){
+    
+      PPIs_peaks0<-PPIs_peaks0[ PPIs_peaks0$corr == max(PPIs_peaks0$corr) ,]
+  }
+  
+  
+PPIs_peaks<-rbind(PPIs_peaks,PPIs_peaks0)
+  
+}
+
+PPIs_peaks<-data.frame(unique(PPIs_peaks))
+PPIs_peaks_select<-PPIs_peaks[,c(1,3,5,6)]
+
+########generate PPI matrix
+
+library(ggplot2)
+library(stringr)
+library(RColorBrewer)
+library(reshape2)
+library(readxl)
+library(readr)
+df <-read.delim(
+    "input_data/lib_free_with_sh2Fasta_report.pg_matrix.tsv",
+    header = TRUE
+  )
+span=0.3
+names(df)[-c(1:5)] <-
+  data.frame(str_split_fixed(names(df)[-c(1:5)], "\\.", 10))[, 8]
+##delete N30 P30
+df<-df[,-grep("30",names(df))]
+df1<-df[,-c(1:5)]
+row.names(df1)<-df[,1]
+Positive<-df1[,grep("P",names(df1))]
+Positive<- Positive[apply(Positive, 1, function(x) !all(is.na(x))), ]
+Positive_mat<-Positive
+Negative<-df1[,grep("N",names(df1))]
+Negative<- Negative[apply(Negative, 1, function(x) !all(is.na(x))), ]
+Negative_mat<-Negative
+allPPI <-
+  read.csv(
+    "input_data/Out.rf.comb.clust.csv",
+    header = F
+  )
+row.names(allPPI) <- paste0("PPI", row.names(allPPI))
+
+###prepare PPI matrix
+PositiveTmp<-Positive[row.names(Positive) %in% c(as.matrix(allPPI[1,])),]
+PositiveTmp<-data.frame(apply(PositiveTmp,2,sum,na.rm=T) )
+names(PositiveTmp)<-row.names(allPPI)[1]
+
+
+
+for (i in 2:nrow (allPPI)) {
+   PositiveTmp1<-Positive[row.names(Positive) %in% c(as.matrix(allPPI[i,])),]
+  PositiveTmp1<-data.frame(apply(PositiveTmp1,2,sum,na.rm=T) )
+  names(PositiveTmp1)<-row.names(allPPI)[i]
+  PositiveTmp<-cbind(PositiveTmp,PositiveTmp1)
+}
+
+
+NegativeTmp<-Negative[row.names(Negative) %in% c(as.matrix(allPPI[1,])),]
+NegativeTmp<-data.frame(apply(NegativeTmp,2,sum,na.rm=T) )
+names(NegativeTmp)<-row.names(allPPI)[1]
+
+for (i in 2:nrow (allPPI)) {
+   NegativeTmp1<-Negative[row.names(Negative) %in% c(as.matrix(allPPI[i,])),]
+  NegativeTmp1<-data.frame(apply(NegativeTmp1,2,sum,na.rm=T) )
+  names(NegativeTmp1)<-row.names(allPPI)[i]
+  NegativeTmp<-cbind(NegativeTmp,NegativeTmp1)
+}
+
+####PPIs Peaks and area
+
+Positive<-data.frame(t(PositiveTmp))
+Negative<-data.frame(t(NegativeTmp))
+PPImatrix<-cbind(Positive,Negative)
+
+library(pracma)
+tmp_sum <-
+  data.frame("PPIs", "fraction", "pos", "peak_high", "peak_area","corr","cv")
+names(tmp_sum) <-
+  c("PPIs", "fraction", "pos", "peak_high", "peak_area","corr","cv")
+tmp_sum <- tmp_sum[-1, ]
+
+#   PPIs_peaks_select$PPIs
+for (i in PPIs_peaks_select$PPIs) {
+  tmp <- c(as.matrix(Positive[row.names(Positive) == i,]))
+  names(tmp) <-seq(1,33,1)
+  smooth_tmp <- stats::loess(tmp ~ seq(1, length(tmp)),span=span) 
+  peaks1 <- PPIs_peaks_select[PPIs_peaks_select$PPIs == i,]
+  peak_area <- c()
+  corr<-c()
+  cv<-c()
+start<-peaks1[1,3]
+ end<-peaks1[1,4] 
+  peak<-function(x) {
+    approx(seq(1, length(tmp)), smooth_tmp$fitted, x)$y
+  }
+    peak_area0 <-
+    integrate(peak,start,end)$value
+    peak_area <- c(peak_area, peak_area0)
+  protInPPI<-c(as.matrix(allPPI[row.names(allPPI)==i,]))
+  protInPPI <- protInPPI[protInPPI!= ""]
+  
+  Positive_mat_tmp1<-Positive_mat[row.names(Positive_mat) %in% protInPPI,]
+  Positive_mat_tmp2<-Positive_mat_tmp1[,c(start:end)]
+  Positive_mat_tmp2 <- Positive_mat_tmp2[rowSums(is.na(Positive_mat_tmp2)) < ncol(Positive_mat_tmp2) * 0.99, ] 
+  Positive_mat_tmp3<-Positive_mat_tmp2
+  names(Positive_mat_tmp3)<-names(Positive_mat_tmp2)
+  cv0<- mean(apply(Positive_mat_tmp3,1,function (x) {sd (x,na.rm=T)/mean(x,na.rm=T)}))
+  cv<-c(cv,cv0)
+  Negative_mat_tmp1<-Negative_mat[row.names(Negative_mat) %in% protInPPI,]
+  Negative_mat_tmp2<-Negative_mat_tmp1[,c(start:end)]
+  Negative_mat_tmp2 <- Negative_mat_tmp2[rowSums(is.na(Negative_mat_tmp2)) < ncol(Negative_mat_tmp2) * 0.99, ] 
+  Negative_mat_tmp3<-Negative_mat_tmp2
+  names(Negative_mat_tmp3)<-names(Negative_mat_tmp2)
+  
+  names(Positive_mat_tmp3)<-seq(1,ncol(Positive_mat_tmp3),1)
+  names(Negative_mat_tmp3)<-seq(1,ncol(Negative_mat_tmp3),1)
+  mat_tmp3<-rbind(Positive_mat_tmp3,Negative_mat_tmp3)
+  mat_tmp3[is.na(mat_tmp3)]<-0
+if (nrow(mat_tmp3)<2)
+{
+  corr0<-0
+} else{
+  corr0<-cor(t(mat_tmp3),method = "pearson",use="everything")
+  corr0[is.na(corr0)]<-0
+  diag(corr0) <- NA
+  corr0<-mean(corr0,na.rm=T)}
+  corr<-c(corr,corr0)
+  
+  tmp_sum0 <-
+  data.frame("PPIs", row.names(peaks1), peaks1[, 2],max(smooth_tmp$fitted), peaks1[, 3], peaks1[, 4], peak_area,corr,cv)
+  names(tmp_sum0) <-
+  c("PPIs", "fraction", "pos", "peak_high", "start","end","peak_area","corr","cv")
+  tmp_sum0$PPIs <- paste0(i)
+  tmp_sum <- rbind(tmp_sum0, tmp_sum)
+}
+Positive_protein_peak <- tmp_sum
+
+tmp_sum <-
+  data.frame("PPIs", "fraction", "pos", "peak_high", "peak_area","corr","cv")
+names(tmp_sum) <-
+  c("PPIs", "fraction", "pos", "peak_high", "peak_area","corr","cv")
+tmp_sum <- tmp_sum[-1, ]
+
+for (i in PPIs_peaks_select$PPIs) {
+  tmp <- c(as.matrix(Negative[row.names(Negative) == i,]))
+  names(tmp) <-seq(1,33,1)
+  smooth_tmp <- stats::loess(tmp ~ seq(1, length(tmp)),span=span) 
+  peaks1 <- PPIs_peaks_select[PPIs_peaks_select$PPIs == i,]
+  peak_area <- c()
+  corr<-c()
+  cv<-c()
+start<-peaks1[1,3]
+ end<-peaks1[1,4] 
+  peak<-function(x) {
+    approx(seq(1, length(tmp)), smooth_tmp$fitted, x)$y
+  }
+    peak_area0 <-
+    integrate(peak,start,end)$value
+    peak_area <- c(peak_area, peak_area0)
+  protInPPI<-c(as.matrix(allPPI[row.names(allPPI)==i,]))
+  protInPPI <- protInPPI[protInPPI!= ""]
+  
+  
+  Positive_mat_tmp1<-Positive_mat[row.names(Positive_mat) %in% protInPPI,]
+  Positive_mat_tmp2<-Positive_mat_tmp1[,c(start:end)]
+  Positive_mat_tmp2 <- Positive_mat_tmp2[rowSums(is.na(Positive_mat_tmp2)) < ncol(Positive_mat_tmp2) * 0.99, ] 
+  Positive_mat_tmp3<-Positive_mat_tmp2
+  names(Positive_mat_tmp3)<-names(Positive_mat_tmp2)
+  
+  Negative_mat_tmp1<-Negative_mat[row.names(Negative_mat) %in% protInPPI,]
+  Negative_mat_tmp2<-Negative_mat_tmp1[,c(start:end)]
+  Negative_mat_tmp2 <- Negative_mat_tmp2[rowSums(is.na(Negative_mat_tmp2)) < ncol(Negative_mat_tmp2) * 0.99, ] 
+  Negative_mat_tmp3<-Negative_mat_tmp2
+  names(Negative_mat_tmp3)<-names(Negative_mat_tmp2)
+  
+  cv0<- mean(apply(Negative_mat_tmp3,1,function (x) {sd (x,na.rm=T)/mean(x,na.rm=T)}))
+  cv<-c(cv,cv0)
+  
+  names(Positive_mat_tmp3)<-seq(1,ncol(Positive_mat_tmp3),1)
+  names(Negative_mat_tmp3)<-seq(1,ncol(Negative_mat_tmp3),1)
+  mat_tmp3<-rbind(Positive_mat_tmp3,Negative_mat_tmp3)
+  mat_tmp3[is.na(mat_tmp3)]<-0
+if (nrow(mat_tmp3)<2)
+{
+  corr0<-0
+} else{
+  corr0<-cor(t(mat_tmp3),method = "pearson",use="everything")
+  corr0[is.na(corr0)]<-0
+  diag(corr0) <- NA
+  corr0<-mean(corr0,na.rm=T)}
+  corr<-c(corr,corr0)
+  
+  tmp_sum0 <-
+  data.frame("PPIs", row.names(peaks1), peaks1[, 2],max(smooth_tmp$fitted), peaks1[, 3], peaks1[, 4], peak_area,corr,cv)
+  names(tmp_sum0) <-
+  c("PPIs", "fraction", "pos", "peak_high", "start","end","peak_area","corr","cv")
+  tmp_sum0$PPIs <- paste0(i)
+  tmp_sum <- rbind(tmp_sum0, tmp_sum)
+}
+Negative_protein_peak <- tmp_sum
+Positive_protein_peak$label<-"Positive"
+Negative_protein_peak$label<-"Negative"
+PPIs_peaks<-rbind(Positive_protein_peak,Negative_protein_peak)
+PPIs_peaks$width<-PPIs_peaks$end-PPIs_peaks$start
+PPIs_peaks_raw<-PPIs_peaks
+write.csv(PPIs_peaks_raw,"PPIs_peaks_raw_all_select.csv")
+
+
+```
+
+
