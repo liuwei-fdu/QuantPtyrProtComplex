@@ -1499,16 +1499,18 @@ PPIs_peaks_raw <- PPIs_peaks
 write.csv(PPIs_peaks_raw, "PPIs_peaks_raw_all.csv")
 ```
 
-```{r select peaks}
-#PPIs_peaks_select
-#peak hight and width
+
+```{r selectPPI}
+###peak width >2
 library(dplyr)
 PPIs_peaks_select<-PPIs_peaks_raw
 PPIs_peaks_select1<-PPIs_peaks_select %>%
     group_by(PPIs) %>%
     mutate(intensity_ratio = peak_high / max(peak_high))
+
+
 pdf(
-    "PPI_select_hight_width2.pdf",
+    "IEC_EGF_positive_negative/EPIC_analysis/ppi_select/PPI_select_hight_width2.pdf",
     width = 6,
     height = 6
   )
@@ -1526,7 +1528,7 @@ pdf(
            PPIs_peaks_select1$width>6 &
             PPIs_peaks_select1$intensity_ratio > 0.2)
  
-  write.csv(point, file = "PPI_select_hight_width2.csv")
+  write.csv(point, file = "IEC_EGF_positive_negative/EPIC_analysis/ppi_select/PPI_select_hight_width2.csv")
   points(
     point$width,
        point$intensity_ratio,
@@ -1535,62 +1537,22 @@ pdf(
     pch = 21,
     cex = 1.5
   )
-legend("topright", legend=c(nrow(PPIs_peaks_select1),nrow(point)), col=c("#00000033", "#FFA07A"), lty=1)
+  #87CEFA"
   
-abline(h = 0.2,
-       v = c(6),
-       lty = 2,
-       lwd = 1)
-  dev.off()
-#peak cv and corr
-peak_corr_cv<-point
-PPIs_peaks_select_both<-peak_corr_cv[peak_corr_cv$corr>0.6 & peak_corr_cv$cv>0.5, ]
- pdf(
-    "PPI_select_corr_cv2.pdf",
-    width = 6,
-    height = 6
-  )
-  plot(
-    peak_corr_cv$corr,peak_corr_cv$cv,
-    col = "#FFA07A",
-    pch = 19,
-    cex = 1,
-    xlab = paste("Pearson Correlation"),
-    ylab = "coefficient of variation",
-    main = "select by peak cv and corr"
- )
-
-points(
-    PPIs_peaks_select_both$corr,
-       PPIs_peaks_select_both$cv,
-    col = 1,
-    bg = "#E64B35CC",
-    pch = 21,
-    cex = 1.5
-  )
-
-legend("topright", legend=c(nrow(peak_corr_cv),nrow(PPIs_peaks_select_both)), col=c("#FFA07A", "#E64B35CC"), lty=1)
-
-
+  
+  legend("topright", legend=c(nrow(PPIs_peaks_select1),nrow(point)), col=c("#00000033", "#FFA07A"), lty=1)
+  
 abline(
-    h = 0.5,
-    v = c(0.6),
+    h = 0.1,
+    v = c(3),
     lty = 2,
     lwd = 1
   )
   dev.off()
 
-  write.csv(PPIs_peaks_select_both,"select_295peaks.csv")
-  
-  
-```
-
-
-
-```{r quantative protein complex matrix}
 peak_corr_cv<-point
 ### PPIs_peaks_select from positive and negative
-PPIs_peaks_select_both<-peak_corr_cv[peak_corr_cv$corr>0.6 & peak_corr_cv$cv>0.5, ]
+PPIs_peaks_select_both<-peak_corr_cv[peak_corr_cv$corr>0.7 & peak_corr_cv$cv>0.4, ]
 PPIs_peaks_select_both$real_pos<-PPIs_peaks_select_both$pos
 PPIs_peaks_select_both_add1<-PPIs_peaks_select_both
 PPIs_peaks_select_both_add1$pos<-PPIs_peaks_select_both_add1$pos+1
@@ -1626,6 +1588,8 @@ PPIs_peaks<-PPIs_peaks
   
 }
 
+
+
 for (i in unique(PPIs_peaks_select_both$PPIs)) {
   
   
@@ -1653,7 +1617,7 @@ library(reshape2)
 library(readxl)
 library(readr)
 df <-read.delim(
-    "input_data/lib_free_with_sh2Fasta_report.pg_matrix.tsv",
+    "IEC_EGF_positive_Negative/lib_free_with_sh2_fasta/lib_free_with_sh2Fasta_report.pg_matrix.tsv",
     header = TRUE
   )
 span=0.3
@@ -1671,10 +1635,11 @@ Negative<- Negative[apply(Negative, 1, function(x) !all(is.na(x))), ]
 Negative_mat<-Negative
 allPPI <-
   read.csv(
-    "input_data/Out.rf.comb.clust.csv",
+    "IEC_EGF_positive_negative/EPIC_analysis/all_230314_COMB_out/Out.rf.comb.clust.csv",
     header = F
   )
 row.names(allPPI) <- paste0("PPI", row.names(allPPI))
+write.csv(allPPI,"IEC_EGF_positive_negative/EPIC_analysis/elute_curve/elute_curve_ppis/allPPIs.csv",row.names = T)
 
 ###prepare PPI matrix
 PositiveTmp<-Positive[row.names(Positive) %in% c(as.matrix(allPPI[1,])),]
@@ -1707,7 +1672,7 @@ for (i in 2:nrow (allPPI)) {
 Positive<-data.frame(t(PositiveTmp))
 Negative<-data.frame(t(NegativeTmp))
 PPImatrix<-cbind(Positive,Negative)
-
+write.csv(PPImatrix,"IEC_EGF_positive_negative/EPIC_analysis/elute_curve/elute_curve_ppis/PPIsMatrix.csv",row.names = T)
 library(pracma)
 tmp_sum <-
   data.frame("PPIs", "fraction", "pos", "peak_high", "peak_area","corr","cv")
@@ -1842,6 +1807,298 @@ PPIs_peaks_raw<-PPIs_peaks
 write.csv(PPIs_peaks_raw,"PPIs_peaks_raw_all_select.csv")
 
 
+
 ```
+
+```{r draw ppi select plot volcanoplot heatmap}
+
+library(dplyr)
+library(reshape2)
+library(ggplot2)
+library(ggrepel)
+library(RColorBrewer)
+library(clusterProfiler)
+library(org.Hs.eg.db)
+###volcanoplpot
+volcanoplot<-PPIs_peaks_raw %>%
+dplyr::select(PPIs,pos,peak_area,corr,label)%>%
+mutate(PPIs=paste0(PPIs,"_",pos))
+volcanoplot_wide <- dcast(volcanoplot,  PPIs~ label, value.var = c("peak_area"))
+volcanoplot_corr <- unique(volcanoplot %>%
+dplyr::select(PPIs,corr))
+volcanoplot_wide2<-merge(volcanoplot_wide,volcanoplot_corr)
+volcanoplot_wide2$fd<-log2(volcanoplot_wide2$Positive /volcanoplot_wide2$Negative)
+row.names(volcanoplot_wide2)<-volcanoplot_wide$PPIs
+dfVolcanoplot2<-volcanoplot_wide2
+plot<-ggplot(dfVolcanoplot2, aes(x = dfVolcanoplot2$fd, y =dfVolcanoplot2$corr)) +
+geom_point(aes(color = ifelse(fd > 0 ,"#87CEFA", "#FFA07A")),size=3)+
+labs(x = "Log2 Fold Change", y = "pearson corr", title = "Volcano Plot")
+dfVolcanoplot2$label=ifelse(abs(dfVolcanoplot2$fd) > 0.5  & dfVolcanoplot2$corr >0.6 ,dfVolcanoplot2$PPIs,"")
+write.csv(dfVolcanoplot2,"IEC_EGF_positive_negative/EPIC_analysis/ppi_volcanoplot/PPI_peak_area_volcano2.csv")
+dfVolcanoplot2$fd[dfVolcanoplot2$fd < -5]<- -3.3
+p <-
+  plot + geom_text_repel(
+    aes(
+      x = dfVolcanoplot2$fd,
+      y = dfVolcanoplot2$corr ,
+      label = dfVolcanoplot2$label
+    ),
+    force = TRUE,
+    show.legend = FALSE,
+    box.padding = 0.1,
+    size=4.5) +
+   scale_x_continuous(limits = c(-3.3,3))+
+
+  theme(
+    legend.direction = 'horizontal',
+    legend.position = 'top',
+    legend.text = element_text(size = 5, color = "black"),
+    legend.title = element_text(size = 15, color = "black") ,
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    panel.background = element_blank(),
+    axis.line = element_line(colour = "black"),
+    axis.ticks.length = unit(6, "pt"),
+    axis.text = element_text(size = 15, color = "black"),
+    axis.text.x = element_text(angle = 45, hjust = 1)
+  ) +
+  geom_vline(xintercept = 0.5) +
+  geom_vline(xintercept = -0.5) +
+  
+  geom_hline(yintercept = 0.6)
+
+
+  ggsave(
+    plot = p,
+    filename = "IEC_EGF_positive_negative/EPIC_analysis/ppi_volcanoplot/PPI_peak_area_volcano2.pdf",
+    device = NULL,width = 7,height = 9
+  
+  )
+  
+  
+
+## diff ppi map by meatscape and cytoscape
+  
+diffppi<-dfVolcanoplot2 %>% filter(corr > 0.6, abs(fd)>0.5)
+diffppi2<-data.frame(str_split_fixed(diffppi$PPIs,"_",2))[,1]
+diffppi3<-allPPI[row.names(allPPI) %in% diffppi2,] 
+
+
+
+for (i in row.names(diffppi3)[1]) {
+  
+  diffprot0<-c(as.matrix(diffppi3[row.names(diffppi3)==i,]))
+  diffprot<-data.frame("ppi",diffprot0)
+names(diffprot)<-c("from","to")
+diffprot$from<-i
+}
+
+for (i in row.names(diffppi3)) {
+  
+  diffprot1<-c(as.matrix(diffppi3[row.names(diffppi3)==i,]))
+  diffprot2<-data.frame("ppi",diffprot1)
+names(diffprot2)<-c("from","to")
+diffprot2$from<-i
+diffprot<-rbind(diffprot,diffprot2)
+}
+
+diffprot<-diffprot[which(!diffprot$to==""),]
+diffprot<-unique(diffprot)
+ 
+library(readxl) 
+pathway<-read_excel("IEC_EGF_positive_negative/EPIC_analysis/ppi_volcanoplot/diifprotByMetascape/metascape_result.xlsx",sheet = 2) %>%
+as.data.frame()
+ pathway1<-pathway %>% 
+filter(grepl("Summary",GroupID)) 
+ 
+ pathway2<-pathway[pathway$Description %in% pathway1$Description,]%>% 
+   filter(!grepl("Summary",GroupID))%>%
+          dplyr::select (Description,LogP,Symbols)
+ 
+
+ 
+ # EGF<-read.csv("IEC_EGF_positive_negative/EPIC_analysis/ppi_volcanoplot/EGF_related.csv ")
+ 
+ 
+ 
+ EGFRpathway<-pathway2[c(2,5,18),]
+ Cytoskeleton<-pathway2[c(4,11,17,19,21),]
+   Complex<-pathway2[8,]
+   
+   
+   for (m in c("EGFRpathway","Cytoskeleton","Complex")) {
+     
+     if (m== "EGFRpathway"){
+ pathway1.1<-EGFRpathway
+ }
+          if (m== "Cytoskeleton"){
+ pathway1.1<-Cytoskeleton
+ }
+ 
+            if (m== "Complex"){
+ pathway1.1<-Complex
+ }
+  
+   
+
+  pathway2<-data.frame(str_split_fixed(pathway1.1$Symbols,",",21))
+  row.names(pathway2)<-pathway1.1$Description
+ 
+  
+ 
+ 
+for (i in row.names(pathway2) [1]) {
+  pathProt0<-c(as.matrix(pathway2[row.names(pathway2)==i,]))
+  pathProt<-data.frame("pathway",pathProt0)
+names(pathProt)<-c("from","to")
+pathProt$from<-i
+}
+ 
+ 
+for (i in row.names(pathway2)) {
+  pathProt1<-c(as.matrix(pathway2[row.names(pathway2)==i,]))
+  pathProt2<-data.frame("pathway",pathProt1)
+names(pathProt2)<-c("from","to")
+pathProt2$from<-i
+pathProt<-rbind(pathProt,pathProt2)
+
+}
+  pathProt<-pathProt[which(!pathProt$to==""),]
+pathProt<-unique(pathProt)
+
+protname<-read_excel("IEC_EGF_positive_negative/EPIC_analysis/ppi_volcanoplot/diifprotByMetascape/metascape_result.xlsx",sheet = 1)
+protname<-data.frame(protname,check.names = T)
+protname1<-protname %>%
+  dplyr::select(MyList,Gene.Symbol)
+names(pathProt)<-c("from","gene")
+names(diffprot)<-c("from","uniprot")
+names(protname1)<-c("uniprot","gene")
+
+pathProt1<-left_join(pathProt,protname1,by="gene")
+pathProt1$to<-paste0(pathProt1$uniprot,"_",pathProt1$gene)
+
+
+diffprot1<-left_join(diffprot,protname1,by="uniprot")
+diffprot1$to<-paste0(diffprot1$uniprot,"_",diffprot1$gene)
+
+names(diffprot1)<-c("to"   , "uniprot" ,"gene",    "from")
+
+cytoscape<-unique(rbind(pathProt1,diffprot1)) 
+write.csv(cytoscape,  paste0("IEC_EGF_positive_negative/EPIC_analysis/ppi_volcanoplot/diffPPIandPathway_network_",m,".csv"),quote = F,row.names = F)
+
+
+  }
+
+
+
+
+
+###ppi table
+
+ppitable<-diffprot1
+names(ppitable)[1:2]<-c("ppi","prot")
+ppivalue<-read.csv("IEC_EGF_positive_negative/EPIC_analysis/ppi_volcanoplot/PPI_peak_area_volcano2.csv")
+ppivalue$ppi<-str_split_fixed(ppivalue$X,"_",2)[,1]
+
+
+protvalue_pos<-data.frame(apply(Positive_mat,1,function (x) sum(x, na.rm=T)))
+protvalue_pos$prot<-row.names(protvalue_pos)
+names(protvalue_pos)[1]<-c("pos")
+protvalue_neg<-data.frame(apply(Negative_mat,1,function (x) sum(x, na.rm=T)))
+protvalue_neg$prot<-row.names(protvalue_neg)
+names(protvalue_neg)[1]<-c("neg")
+
+
+
+ppitable2<-left_join(ppitable,ppivalue,by="ppi")
+ppitable3<-left_join(ppitable2,protvalue_pos,by="prot")
+ppitable4<-left_join(ppitable3,protvalue_neg,by="prot")
+
+ppi<-ppitable4[,c(1,8,7)]
+names(ppi)<-c('node',"pos","neg")
+ppi$label<-"ppi"
+
+prot<-ppitable4[,c(4,12,13)]
+names(prot)<-c('node',"pos","neg")
+prot$label<-"prot"
+
+
+pathway<-data.frame(pathway1[,-3],pathway1[,2])
+names(pathway)<-c('node',"pos","neg")
+pathway$label<-"pathway"
+
+
+
+ppitable5<-rbind(ppi,prot,pathway) %>%
+   filter(!is.na(pos))
+ppitable5<-unique(ppitable5)
+
+write.csv(ppitable5,"IEC_EGF_positive_negative/EPIC_analysis/ppi_volcanoplot/diffPPIandPathway_forcytoscape_table.csv",quote = F,row.names = F)
+
+
+
+
+### heatmap for 176 quantifive PPI 
+
+
+###volcanoplpot
+
+quanPPIs<-PPIs_peaks_raw %>%
+dplyr::select(PPIs,pos,peak_area,corr,label)%>%
+mutate(PPIs_pos=paste0(PPIs,"_",pos))
+
+heatmap_matrix<-PPImatrix[row.names(PPImatrix) %in% quanPPIs$PPIs,]
+heatmap_matrix$PPIs<-row.names(heatmap_matrix)
+heatmap_matrix2<-merge(quanPPIs[,c(1,2,6)],heatmap_matrix, by="PPIs",all=T)
+heatmap_matrix2<-unique(heatmap_matrix2)
+
+heatmap_matrix3<-heatmap_matrix2[order(heatmap_matrix2$pos),]
+row.names(heatmap_matrix3)<-heatmap_matrix3$PPIs_pos
+heatmap_matrix4<-heatmap_matrix3[,-c(1:3)]
+
+library(pheatmap)
+colors = c(brewer.pal(11, "RdYlBu")[10:1])
+pheatmap(
+  heatmap_matrix4,
+  color = colors,
+  scale = "row",
+  fontsize_col = 10,
+  cluster_rows = F,
+  cluster_cols = F,
+  show_rownames = T,
+  show_colnames = ,
+  fontsize = 10,
+  cellwidth = 10,
+  cellheight = 10,
+  gaps_col = c(33),
+  filename = "IEC_EGF_positive_negative/EPIC_analysis/PPIs_Heatmap_select173_new.pdf",
+  main = paste0("Heatmap for PPIs ")
+)
+
+
+corr<-data.frame(apply(heatmap_matrix4,1, function (x) { cor(x[1:33],x[34:66], method = c("pearson"))    }              ))
+
+
+library(pheatmap)
+colors = c(brewer.pal(11, "Reds"))[1:8]
+pheatmap(
+  corr,
+  color = colors,
+
+  fontsize_col = 10,
+  cluster_rows = F,
+  cluster_cols = F,
+  show_rownames = T,
+  show_colnames = ,
+  fontsize = 10,
+  cellwidth = 10,
+  cellheight = 10,
+
+  filename = "IEC_EGF_positive_negative/EPIC_analysis/PPIs_Heatmap_select173_corr.pdf",
+  main = paste0("Heatmap for PPIs ")
+)
+
+```
+
 
 
