@@ -55,16 +55,25 @@ data <- Venn(
     "SH2" = SH2_1$Protein.Group
   )
 )
-a <- plot(data, doWeight = F)
+
+
+
+a <- plot(data, doWeight = T)
+
 dev.off()
 
 
 
-# Subset data for volcano plot
+
+
+library(ggplot2)
+library(ggrepel)
+
 dfVolcanoplot <- df[-grep(';', df$Protein.Group), c(1, 6:11)]
 dfVolcanoplot1 <- dfVolcanoplot[, -1]
 row.names(dfVolcanoplot1) <- dfVolcanoplot$Protein.Group
-dfVolcanoplot1[is.na(dfVolcanoplot1)] <- min(dfVolcanoplot1, na.rm = T)
+dfVolcanoplot1[is.na(dfVolcanoplot1)] <- min(dfVolcanoplot1, na.rm = T) * 0.5
+
 
 # Calculate fold changes and p-values
 fd <- data.frame(apply(dfVolcanoplot1, 1, function(x) log2((mean(na.omit(x[grep("SP", names(dfVolcanoplot1))])) / mean(na.omit(x[grep("S1|S2|S3", names(dfVolcanoplot1))] ))))))
@@ -73,6 +82,70 @@ pvalue <- data.frame(apply(dfVolcanoplot1, 1, function(x) t.test(x[grep("SP", na
 vol <- cbind(fd, pvalue)
 names(vol) <- c("fd", "P_value")
 dfVolcanoplot2 <- data.frame((cbind(dfVolcanoplot1, vol)))
+
+
+
+plot<-ggplot(dfVolcanoplot2, aes(x = dfVolcanoplot2$fd, y = -log10(dfVolcanoplot2$P_value))) +
+  xlim(-5.5,5.5)+
+  
+geom_point(aes(color = ifelse(abs(fd) > 2 & P_value<0.05  ,"#87CEFA", "#00000033")),size=2)+
+labs(x = "Log2 Fold Change", y = "-log10(p value)", title = "SH2_probe VS SH2")
+dfVolcanoplot2$label=ifelse(abs(dfVolcanoplot2$fd) > 2  & dfVolcanoplot2$P_value < 0.05 ,row.names(dfVolcanoplot2),"")
+write.csv(dfVolcanoplot2,"out/dfVolcanoplot2.csv")
+
+p <-
+  plot + geom_text_repel(
+    aes(
+      x = dfVolcanoplot2$fd,
+      y = -log10(dfVolcanoplot2$P_value) ,
+      label = dfVolcanoplot2$label
+    ),
+    force = TRUE,
+    show.legend = FALSE,
+    box.padding = 0.7,
+    size=4.5) +
+   
+
+  theme(
+    legend.direction = 'horizontal',
+    legend.position = 'top',
+    legend.text = element_text(size = 5, color = "black"),
+    legend.title = element_text(size = 15, color = "black") ,
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    panel.background = element_blank(),
+    axis.line = element_line(colour = "black"),
+    axis.ticks.length = unit(6, "pt"),
+    axis.text = element_text(size = 15, color = "black"),
+    axis.text.x = element_text(angle = 45, hjust = 1)
+  ) +
+  geom_vline(xintercept = 2) +
+  geom_vline(xintercept = -2) +
+  
+  geom_hline(yintercept = 1.3)
+
+
+  ggsave(
+    plot = p,
+    filename = "SH2_SH2_Probe_volcanolplot.pdf",
+    device = NULL,width = 10,height = 7)
+
+### kinase database
+  Kinase <- read_excel("input_data/Kinase.xlsx")
+  dfVolcanoplot3<-dfVolcanoplot2
+ dfVolcanoplot3$uniprot<-row.names(dfVolcanoplot3)
+  
+
+
+dfVolcanoplot4<-dfVolcanoplot3[dfVolcanoplot3$uniprot %in%  Kinase$Entry,]
+  
+up<-subset(dfVolcanoplot4, dfVolcanoplot4$fd> 0.5&dfVolcanoplot4$P_value< 0.05)
+down<-subset(dfVolcanoplot4, dfVolcanoplot4$fd< -0.5 &dfVolcanoplot4$P_value< 0.05)
+
+
+
+
+
 
 # Generate volcano plot
 pdf("out/SH2_probe_sh2.pdf", width = 6, height = 6)
@@ -90,10 +163,9 @@ plot(
   xlim = c(-4, 4),
   ylim = c(min(-log10(dfVolcanoplot2$P_value), na.rm = T), max(-log10(dfVolcanoplot2$P_value), na.rm = T))
 )
-
 # Add significance thresholds and highlighting for significant points
-up <- subset(dfVolcanoplot2, dfVolcanoplot2$P_value < 0.05 & dfVolcanoplot2$fd > 0.25)
-down <- subset(dfVolcanoplot2, dfVolcanoplot2$P_value < 0.05 & dfVolcanoplot2$fd < -0.25)
+up <- subset(dfVolcanoplot2, dfVolcanoplot2$P_value < 0.05 & dfVolcanoplot2$fd > 2)
+down <- subset(dfVolcanoplot2, dfVolcanoplot2$P_value < 0.05 & dfVolcanoplot2$fd < -2)
 points(
   up$fd,
   -log10(up$P_value),
@@ -110,10 +182,8 @@ points(
   pch = 21,
   cex = 1.5
 )
-abline(h = 1.3, v = c(-0.25, 0.25), lty = 2, lwd = 1)
-
+abline(h = 1.3, v = c(-2, 2), lty = 2, lwd = 1)
 dev.off()
-
 
 
 
@@ -428,7 +498,7 @@ Negative_NA50<- Negative[rowMeans(is.na(Negative)) < 0.5, ]
   
 pdf("venn_positive_negative_proteins.pdf ")
 data<-Venn(list("EGF+"=row.names(Positive),"EGF-"=row.names(Negative)))
-a<-plot(data,doWeight=F)
+a<-plot(data,doWeight=)
 dev.off()
 
 pdf("venn_positive_negative_proteins_NA50.pdf ")
@@ -2101,4 +2171,588 @@ pheatmap(
 ```
 
 
+
+```{r all ppi map to corum }
+rm(list=ls())
+library(dplyr)
+library(readr)
+library(stringr)
+ppi <- read.csv("input_data/allPPIs.csv",row.names = 1) 
+corum <-
+  read_delim(
+    "input_data/allComplexes.txt",
+    delim = "\t",
+    escape_double = FALSE,
+    trim_ws = TRUE
+  ) %>%
+  as.data.frame() %>%
+  mutate(corumid=paste0(ComplexID,"_",ComplexName))%>%
+select(corumid,6)
+
+corum2<-str_split_fixed(corum$`subunits(UniProt IDs)`,";",100) %>%
+  as.data.frame() 
+row.names(corum2)<-corum$corumid
+  
+df<-data.frame("ppi","corumid","ppi_subunits","ppi_subunits_in_corum","score")
+names(df)<-c("ppi","corumid","ppi_subunits","ppi_subunits_in_corum","score")
+df<-df[-1,]
+
+for (i in row.names(ppi)) {
+  ppis<-as.vector(as.matrix(ppi[row.names(ppi)==i,]))
+  ppis<-ppis[!ppis==""]
+  allppi<-apply(corum2,1,  function(x){
+  tmp<-as.matrix(x)
+  tmp<-tmp[!tmp==""]
+  ratio_ppi<-length( ppis[which(ppis%in%tmp)])/length(ppis)
+  ratio_corum<-length( ppis[which(ppis%in%tmp)])/length(tmp)
+  
+  ppi_subunits_in_corum<-paste((ppis[which(ppis%in%tmp)]),collapse = ";")
+  score<-ratio_ppi*ratio_corum
+out<-c(ppi_subunits_in_corum,score)
+  
+
+  } )
+  
+  
+  allppi<-data.frame(t(allppi))
+  names(allppi)<-c("ppi_subunits_in_corum","score")
+  
+
+  if (max(allppi$score)==0){
+    df0<-data.frame(i,NA,length(ppis),NA,0)
+    names(df0)<-c("ppi","corumid","ppi_subunits","ppi_subunits_in_corum","score")
+}else{ 
+  corumi<-paste(c(row.names(allppi[(which(allppi$score==max(allppi$score))),])),collapse = ";")
+  ppi_subunits_in_corum<-paste(c((allppi[(which(allppi$score==max(allppi$score))),1])),collapse = "_")
+  df0<-data.frame(i,corumi,length(ppis),ppi_subunits_in_corum,max(allppi$score))
+    names(df0)<-c("ppi","corumid","ppi_subunits","ppi_subunits_in_corum","score")
+
+
+     
+}
+  df<-rbind(df,df0)
+}
+
+
+write.csv(df,"out/ppi_map2corum.csv",row.names = F)
+
+PPIselect<-read.csv("input_data/PPI_select_corr_cv2.csv")%>%
+select(-1)
+names(df)[1]<-"PPIs"
+PPIselect2<-merge(PPIselect,df,by="PPIs",all.x=T, all.y = F)
+
+write.csv(PPIselect2,"out/295_PPI_select.csv")
+
+```
+
+
+```{r draw ppi select plot volcanoplot heatmap}
+
+library(dplyr)
+library(reshape2)
+library(ggplot2)
+library(ggrepel)
+library(RColorBrewer)
+library(clusterProfiler)
+library(org.Hs.eg.db)
+###volcanoplpot
+volcanoplot<-PPIs_peaks_raw %>%
+dplyr::select(PPIs,pos,peak_area,corr,label)%>%
+mutate(PPIs=paste0(PPIs,"_",pos))
+volcanoplot_wide <- dcast(volcanoplot,  PPIs~ label, value.var = c("peak_area"))
+volcanoplot_corr <- unique(volcanoplot %>%
+dplyr::select(PPIs,corr))
+volcanoplot_wide2<-merge(volcanoplot_wide,volcanoplot_corr)
+volcanoplot_wide2$fd<-log2(volcanoplot_wide2$Positive /volcanoplot_wide2$Negative)
+row.names(volcanoplot_wide2)<-volcanoplot_wide$PPIs
+dfVolcanoplot2<-volcanoplot_wide2
+plot<-ggplot(dfVolcanoplot2, aes(x = dfVolcanoplot2$fd, y =dfVolcanoplot2$corr)) +
+geom_point(aes(color = ifelse(fd > 0 ,"#87CEFA", "#FFA07A")),size=3)+
+labs(x = "Log2 Fold Change", y = "pearson corr", title = "Volcano Plot")
+dfVolcanoplot2$label=ifelse(abs(dfVolcanoplot2$fd) > 0.5  & dfVolcanoplot2$corr >0.6 ,dfVolcanoplot2$PPIs,"")
+write.csv(dfVolcanoplot2,"IEC_EGF_positive_negative/EPIC_analysis/ppi_volcanoplot/PPI_peak_area_volcano2.csv")
+dfVolcanoplot2$fd[dfVolcanoplot2$fd < -5]<- -3.3
+p <-
+  plot + geom_text_repel(
+    aes(
+      x = dfVolcanoplot2$fd,
+      y = dfVolcanoplot2$corr ,
+      label = dfVolcanoplot2$label
+    ),
+    force = TRUE,
+    show.legend = FALSE,
+    box.padding = 0.1,
+    size=4.5) +
+   scale_x_continuous(limits = c(-3.3,3))+
+
+  theme(
+    legend.direction = 'horizontal',
+    legend.position = 'top',
+    legend.text = element_text(size = 5, color = "black"),
+    legend.title = element_text(size = 15, color = "black") ,
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    panel.background = element_blank(),
+    axis.line = element_line(colour = "black"),
+    axis.ticks.length = unit(6, "pt"),
+    axis.text = element_text(size = 15, color = "black"),
+    axis.text.x = element_text(angle = 45, hjust = 1)
+  ) +
+  geom_vline(xintercept = 0.5) +
+  geom_vline(xintercept = -0.5) +
+  
+  geom_hline(yintercept = 0.6)
+
+
+  ggsave(
+    plot = p,
+    filename = "IEC_EGF_positive_negative/EPIC_analysis/ppi_volcanoplot/PPI_peak_area_volcano2.pdf",
+    device = NULL,width = 7,height = 9
+  
+  )
+  
+  
+
+## diff ppi map by meatscape and cytoscape
+  
+diffppi<-dfVolcanoplot2 %>% filter(corr > 0.6, abs(fd)>0.5)
+diffppi2<-data.frame(str_split_fixed(diffppi$PPIs,"_",2))[,1]
+diffppi3<-allPPI[row.names(allPPI) %in% diffppi2,] 
+
+
+
+for (i in row.names(diffppi3)[1]) {
+  
+  diffprot0<-c(as.matrix(diffppi3[row.names(diffppi3)==i,]))
+  diffprot<-data.frame("ppi",diffprot0)
+names(diffprot)<-c("from","to")
+diffprot$from<-i
+}
+
+for (i in row.names(diffppi3)) {
+  
+  diffprot1<-c(as.matrix(diffppi3[row.names(diffppi3)==i,]))
+  diffprot2<-data.frame("ppi",diffprot1)
+names(diffprot2)<-c("from","to")
+diffprot2$from<-i
+diffprot<-rbind(diffprot,diffprot2)
+}
+
+diffprot<-diffprot[which(!diffprot$to==""),]
+diffprot<-unique(diffprot)
+ 
+library(readxl) 
+pathway<-read_excel("IEC_EGF_positive_negative/EPIC_analysis/ppi_volcanoplot/diifprotByMetascape/metascape_result.xlsx",sheet = 2) %>%
+as.data.frame()
+ pathway1<-pathway %>% 
+filter(grepl("Summary",GroupID)) 
+ 
+ pathway2<-pathway[pathway$Description %in% pathway1$Description,]%>% 
+   filter(!grepl("Summary",GroupID))%>%
+          dplyr::select (Description,LogP,Symbols)
+ 
+
+ 
+ # EGF<-read.csv("IEC_EGF_positive_negative/EPIC_analysis/ppi_volcanoplot/EGF_related.csv ")
+ 
+ 
+ 
+ EGFRpathway<-pathway2[c(2,5,18),]
+ Cytoskeleton<-pathway2[c(4,11,17,19,21),]
+   Complex<-pathway2[8,]
+   
+   
+   for (m in c("EGFRpathway","Cytoskeleton","Complex")) {
+     
+     if (m== "EGFRpathway"){
+ pathway1.1<-EGFRpathway
+ }
+          if (m== "Cytoskeleton"){
+ pathway1.1<-Cytoskeleton
+ }
+ 
+            if (m== "Complex"){
+ pathway1.1<-Complex
+ }
+  
+   
+
+  pathway2<-data.frame(str_split_fixed(pathway1.1$Symbols,",",21))
+  row.names(pathway2)<-pathway1.1$Description
+ 
+  
+ 
+ 
+for (i in row.names(pathway2) [1]) {
+  pathProt0<-c(as.matrix(pathway2[row.names(pathway2)==i,]))
+  pathProt<-data.frame("pathway",pathProt0)
+names(pathProt)<-c("from","to")
+pathProt$from<-i
+}
+ 
+ 
+for (i in row.names(pathway2)) {
+  pathProt1<-c(as.matrix(pathway2[row.names(pathway2)==i,]))
+  pathProt2<-data.frame("pathway",pathProt1)
+names(pathProt2)<-c("from","to")
+pathProt2$from<-i
+pathProt<-rbind(pathProt,pathProt2)
+
+}
+  pathProt<-pathProt[which(!pathProt$to==""),]
+pathProt<-unique(pathProt)
+
+protname<-read_excel("IEC_EGF_positive_negative/EPIC_analysis/ppi_volcanoplot/diifprotByMetascape/metascape_result.xlsx",sheet = 1)
+protname<-data.frame(protname,check.names = T)
+protname1<-protname %>%
+  dplyr::select(MyList,Gene.Symbol)
+names(pathProt)<-c("from","gene")
+names(diffprot)<-c("from","uniprot")
+names(protname1)<-c("uniprot","gene")
+
+pathProt1<-left_join(pathProt,protname1,by="gene")
+pathProt1$to<-paste0(pathProt1$uniprot,"_",pathProt1$gene)
+
+
+diffprot1<-left_join(diffprot,protname1,by="uniprot")
+diffprot1$to<-paste0(diffprot1$uniprot,"_",diffprot1$gene)
+
+names(diffprot1)<-c("to"   , "uniprot" ,"gene",    "from")
+
+cytoscape<-unique(rbind(pathProt1,diffprot1)) 
+write.csv(cytoscape,  paste0("IEC_EGF_positive_negative/EPIC_analysis/ppi_volcanoplot/diffPPIandPathway_network_",m,".csv"),quote = F,row.names = F)
+
+
+  }
+
+
+
+
+
+###ppi table
+
+ppitable<-diffprot1
+names(ppitable)[1:2]<-c("ppi","prot")
+ppivalue<-read.csv("IEC_EGF_positive_negative/EPIC_analysis/ppi_volcanoplot/PPI_peak_area_volcano2.csv")
+ppivalue$ppi<-str_split_fixed(ppivalue$X,"_",2)[,1]
+
+
+protvalue_pos<-data.frame(apply(Positive_mat,1,function (x) sum(x, na.rm=T)))
+protvalue_pos$prot<-row.names(protvalue_pos)
+names(protvalue_pos)[1]<-c("pos")
+protvalue_neg<-data.frame(apply(Negative_mat,1,function (x) sum(x, na.rm=T)))
+protvalue_neg$prot<-row.names(protvalue_neg)
+names(protvalue_neg)[1]<-c("neg")
+
+
+
+ppitable2<-left_join(ppitable,ppivalue,by="ppi")
+ppitable3<-left_join(ppitable2,protvalue_pos,by="prot")
+ppitable4<-left_join(ppitable3,protvalue_neg,by="prot")
+
+ppi<-ppitable4[,c(1,8,7)]
+names(ppi)<-c('node',"pos","neg")
+ppi$label<-"ppi"
+
+prot<-ppitable4[,c(4,12,13)]
+names(prot)<-c('node',"pos","neg")
+prot$label<-"prot"
+
+
+pathway<-data.frame(pathway1[,-3],pathway1[,2])
+names(pathway)<-c('node',"pos","neg")
+pathway$label<-"pathway"
+
+
+
+ppitable5<-rbind(ppi,prot,pathway) %>%
+   filter(!is.na(pos))
+ppitable5<-unique(ppitable5)
+
+write.csv(ppitable5,"IEC_EGF_positive_negative/EPIC_analysis/ppi_volcanoplot/diffPPIandPathway_forcytoscape_table.csv",quote = F,row.names = F)
+
+
+
+
+### heatmap for 176 quantifive PPI 
+
+
+###volcanoplpot
+
+
+quanPPIs<-PPIs_peaks_raw %>%
+dplyr::select(PPIs,pos,peak_area,corr,label)%>%
+mutate(PPIs_pos=paste0(PPIs,"_",pos))
+
+heatmap_matrix<-PPImatrix[row.names(PPImatrix) %in% quanPPIs$PPIs,]
+heatmap_matrix$PPIs<-row.names(heatmap_matrix)
+heatmap_matrix2<-merge(quanPPIs[,c(1,2,6)],heatmap_matrix, by="PPIs",all=T)
+heatmap_matrix2<-unique(heatmap_matrix2)
+
+heatmap_matrix3<-heatmap_matrix2[order(heatmap_matrix2$pos),]
+row.names(heatmap_matrix3)<-heatmap_matrix3$PPIs_pos
+heatmap_matrix4<-heatmap_matrix3[,-c(1:3)]
+
+library(pheatmap)
+colors = c(brewer.pal(11, "RdYlBu")[10:1])
+pheatmap(
+  heatmap_matrix4,
+  color = colors,
+  scale = "row",
+  fontsize_col = 10,
+  cluster_rows = F,
+  cluster_cols = F,
+  show_rownames = T,
+  show_colnames = ,
+  fontsize = 10,
+  cellwidth = 10,
+  cellheight = 10,
+  gaps_col = c(33),
+  filename = "IEC_EGF_positive_negative/EPIC_analysis/PPIs_Heatmap_select173_new.pdf",
+  main = paste0("Heatmap for PPIs ")
+)
+
+
+corr<-data.frame(apply(heatmap_matrix4,1, function (x) { cor(x[1:33],x[34:66], method = c("pearson"))    }              ))
+
+
+library(pheatmap)
+colors = c(brewer.pal(11, "Reds"))[1:8]
+pheatmap(
+  corr,
+  color = colors,
+
+  fontsize_col = 10,
+  cluster_rows = F,
+  cluster_cols = F,
+  show_rownames = T,
+  show_colnames = ,
+  fontsize = 10,
+  cellwidth = 10,
+  cellheight = 10,
+
+  filename = "IEC_EGF_positive_negative/EPIC_analysis/PPIs_Heatmap_select173_corr.pdf",
+  main = paste0("Heatmap for PPIs ")
+)
+
+
+```
+
+
+
+
+
+
+
+```{r plot stringdb and corum}
+rm(list=ls())
+library(STRINGdb)
+library(igraph)
+library(dplyr)
+library(ggplot2)
+library(ggraph)
+library(readr)
+library(stringr)
+selectppi0<-read.csv("out/295_PPI_select.csv")%>%
+  as.data.frame()
+selectppi<-selectppi0 %>%
+  
+  
+select(PPIs,ppi_subunits,score,corumid,ppi_subunits_in_corum)%>%
+mutate(anno=paste0(ppi_subunits,"-",score))
+selectppi<-unique(selectppi)
+
+allppi<-read.csv("input_data/allPPIs.csv",row.names = 1)
+string_db <- STRINGdb$new( version="11.5", species=9606,
+score_threshold=400, network_type="full", input_directory="")
+
+corum <-
+  read_delim(
+    "input_data/allComplexes.txt",
+    delim = "\t",
+    escape_double = FALSE,
+    trim_ws = TRUE
+  ) %>%
+  as.data.frame() %>%
+  mutate(corumid=paste0(ComplexID,"_",ComplexName))%>%
+select(corumid,6)
+
+
+#all_name_mapped <- string_db$map(all_prot[,c(1,2)], "Protein.Group",removeUnmappedRows = F )
+all_name_mapped<-read.csv("input_data/name_map2stringid.csv")
+
+# selectppi$PPIs
+for (ppi in (selectppi$PPIs)) {
+  
+  
+anno<-c(as.matrix(selectppi[selectppi$PPIs== ppi,"anno"]))
+corumid<- c(as.matrix(selectppi[selectppi$PPIs== ppi,"corumid"]))
+prot_in_corum<-c(as.matrix(selectppi[selectppi$PPIs== ppi,"ppi_subunits_in_corum"]))
+prot_in_corum<-gsub("_|;",";",prot_in_corum)
+prot_in_corum<-c(unique(as.matrix(str_split_fixed(prot_in_corum,";",100))))
+prot_in_corum<-prot_in_corum[!prot_in_corum==""]
+
+ppi1<-c(as.matrix(allppi[row.names(allppi)==ppi,]))
+ppi1<-ppi1[!ppi1==""]%>%
+as.data.frame()
+names(ppi1)<-"uniprot"
+name_mapped <- all_name_mapped[all_name_mapped$Protein.Group %in% ppi1$uniprot,-2]
+
+interactions <- string_db$get_interactions(name_mapped$STRING_id)
+
+if(length(interactions$from)>0){
+
+
+interactions$from <- name_mapped$Protein.Group[match(interactions$from, name_mapped$STRING_id)]
+interactions$to <- name_mapped$Protein.Group[match(interactions$to, name_mapped$STRING_id)]
+nodes <- interactions %>% { data.frame(gene = c(.$from, .$to)) } %>% distinct()
+prot_unppi<-ppi1$uniprot[-which(ppi1$uniprot %in% nodes$gene)]
+if(length(prot_unppi)==0){
+  
+  
+}else
+{
+ prot_unppi<-prot_unppi
+
+  
+prot_unppi<-data.frame(prot_unppi,NA,0)
+names(prot_unppi)<-names(interactions)
+}
+
+interactions<-rbind(interactions,prot_unppi)
+interactions$ppi<-ppi
+interactions$corumid<-corumid
+interactions$anno<-anno
+interactions<-unique(interactions)
+interactions_table<-ppi1
+interactions_table$corum<-interactions_table$uniprot %in% prot_in_corum
+interactions_table$ppi<-ppi
+write.csv(interactions,paste0("out/ppi_select//interactions_to_cyto/20230707/network/",ppi,"_cyto_network.csv"),quote = F,row.names = F)
+write.csv(interactions_table,paste0("out/ppi_select//interactions_to_cyto/20230707/table/",ppi,"_cyto_table.csv"),quote = F,row.names = F)
+
+}
+else
+{
+
+}
+
+}
+library(readr)
+
+lw.combineAllFile<-function(file=file,file.type=c("csv","txt","excel"))
+{
+        aa<-list.files(paste0(file))
+        if(file.type=="csv"){
+                df1<-read_csv(paste0(file,"/",aa[1]))
+                df1<-df1[-(1:nrow(df1)),]
+                for (i in 1:length(aa)) {
+                        df<-read_csv(paste0(file,"/",aa[i]))
+                        df1<-rbind(df1,df)
+                }
+        }
+        
+        else if(file.type=="txt")
+        {df1<-read.table(paste0(file,"/",aa[1]),header = T,sep="\t")
+        df1<-df1[-(1:nrow(df1)),]
+        for (i in 1:length(aa)) {
+                df<-read.table(paste0(file,"/",aa[i]),header = T,sep="\t")
+                df1<-rbind(df1,df)
+        }
+        }
+        
+        else if(file.type=="excel")
+        {df1<-read_excel(paste0(file,"/",aa[1]),sheet = 1)
+        df1<-df1[-(1:nrow(df1)),]
+        for (i in 1:length(aa)) {
+                df<-read_excel(paste0(file,"/",aa[i]),sheet = 1)
+                df1<-rbind(df1,df)
+        }
+        }
+        df1
+        
+}
+
+network<-lw.combineAllFile(file = "E:\\OneDrive\\OneDrive_WU\\FUDAN\\Wet_Dry_LAB\\Drylab\\ProteinComplexAnalysis\\QuantPtyrProtComplex\\out\\ppi_select\\interactions_to_cyto\\20230707/network/", file.type = "csv")
+
+table<-lw.combineAllFile(file = "E:\\OneDrive\\OneDrive_WU\\FUDAN\\Wet_Dry_LAB\\Drylab\\ProteinComplexAnalysis\\QuantPtyrProtComplex\\out\\ppi_select\\interactions_to_cyto\\20230707/table//", file.type = "csv")
+
+write.csv(network,paste0("out/ppi_select//interactions_to_cyto/20230707/","all_cyto_network.csv"),quote = F,row.names = F)
+write.csv(table,paste0("out/ppi_select//interactions_to_cyto/20230707/","all_cyto_table.csv"),quote = F,row.names = F)
+
+
+
+```
+
+```{r plot all ppi network}
+rm(list=ls())
+library(igraph)
+library(stringr)
+network<-read.csv("out/ppi_select/interactions_to_cyto/20230707/all_cyto_network.csv")
+table<-read.csv("out/ppi_select/interactions_to_cyto/20230707/all_cyto_table.csv")
+network$Corumid<-data.frame(str_split_fixed(network$corumid,"_",2))[,1]
+network$Corum<-data.frame(str_split_fixed(network$corumid,"_",2))[,2]
+network$anno<-paste0(network$ppi," ",network$Corum," ","(Corum id: ",network$Corumid,")")
+network$anno<-gsub("\\(Corum id: NA\\)"," ",network$anno)
+
+pdf("out/tmp.pdf", width = 8.27, height = 15)
+
+# Calculate the required number of rows and columns for subplots
+num_plots <- length(unique(network$ppi))
+num_rows <- ceiling(sqrt(num_plots))
+num_cols <- ceiling(num_plots / num_rows)
+
+par(mfrow = c(num_rows, num_cols), mar = c(1, 0.3, 0.3, 0.3))
+
+# Loop to generate subplots
+counter <- 1
+for (i in unique(network$ppi)) {
+    network_matrix <- network[network$ppi == i, ]
+    table_matrix <- table[table$ppi == i, ]
+    g <- graph.data.frame(network_matrix, directed = FALSE)
+    V(g)$color <- ifelse(V(g)$name %in% table_matrix$uniprot, ifelse(table_matrix$corum == "TRUE", "#F6B782","#4EAAC7"), "gray")
+    
+    par(font.main = 2, cex.main = 0.3)
+    
+    main_title <- unique(network_matrix$anno)
+    main_title_lines <- strwrap(main_title, width = 20)
+    main_title_lines <- paste(main_title_lines, collapse = "\n")
+    
+    # Set vertex.size based on the number of nodes
+    num_nodes <- vcount(g)
+    if (num_nodes <= 5) {
+        vertex_size <- 70
+    } else if (num_nodes >= 5 & num_nodes < 8) {
+        vertex_size <- 60
+    } else if (num_nodes >= 8 & num_nodes < 10) {
+        vertex_size <- 50
+    } else if (num_nodes >= 10 & num_nodes < 13) {
+        vertex_size <- 40
+    } else if (num_nodes >= 13 & num_nodes < 15) {
+        vertex_size <- 30
+    } else if (num_nodes >= 15 & num_nodes < 20) {
+        vertex_size <- 20
+    } else {
+        vertex_size <- 10
+    }
+    
+    plot(g, vertex.color = V(g)$color, vertex.label = V(g)$name, layout = layout.circle, main = main_title_lines,
+          vertex.label.cex = 0.8, vertex.border = "blue", vertex.size = vertex_size)
+  
+    counter <- counter + 1
+    if (counter > num_plots) {
+        break  # Exit the loop to ensure no extra subplots are generated
+    }
+}
+
+dev.off()
+
+
+
+
+
+
+
+
+
+```
 
